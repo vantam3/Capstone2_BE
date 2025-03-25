@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+# Ignore environment files
+.env
+# Ignore database files
+db.sqlite3
+# Ignore static files and compiled files
+/static/
+*.log
+*.pot
+*.pyc
+*.pyo
+.DS_Store
