@@ -37,6 +37,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    'app',
+    'rest_framework',
+    'rest_framework.authtoken',
+    'corsheaders',
+    'rest_framework_simplejwt.token_blacklist',
 ]
 
 MIDDLEWARE = [
@@ -47,8 +53,12 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-]
 
+    'corsheaders.middleware.CorsMiddleware',
+]
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',  # URL của React FE
+]
 ROOT_URLCONF = 'speakpro.urls'
 
 TEMPLATES = [
@@ -75,8 +85,12 @@ WSGI_APPLICATION = 'speakpro.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'speak_pro',  # Tên cơ sở dữ liệu bạn đã tạo
+        'USER': 'root',    # Tên người dùng MySQL
+        'PASSWORD': '123456',  # Mật khẩu MySQL
+        'HOST': 'localhost',      # Hoặc IP của máy chủ MySQL nếu không cài đặt trên máy cục bộ
+        'PORT': '3306',           # Cổng MySQL mặc định
     }
 }
 
@@ -121,3 +135,23 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+}
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),  # Thời gian sống của access token
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),  # Thời gian sống của refresh token
+    'ROTATE_REFRESH_TOKENS': True,  # Tùy chọn quay lại refresh token sau mỗi yêu cầu
+    'BLACKLIST_AFTER_ROTATION': True,  # Xóa refresh token cũ sau khi quay lại
+    'UPDATE_LAST_LOGIN': True,  # Cập nhật thời gian đăng nhập cuối cùng
+}
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'  
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = '....'  
+EMAIL_HOST_PASSWORD = '...'
