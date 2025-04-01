@@ -11,7 +11,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
-
+from os import path
+import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -27,6 +28,20 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',  # URL của React FE
+]
+# settings.py
+# Cài đặt CORS
+# settings.py
+
+import os
+
+# Đường dẫn đến thư mục lưu trữ tệp media (local storage)
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# URL mà tệp media có thể truy cập được
+MEDIA_URL = '/media/'
 
 # Application definition
 
@@ -37,6 +52,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    'rest_framework',  # Cài đặt Django REST framework
+    'app',
 ]
 
 MIDDLEWARE = [
@@ -75,8 +93,12 @@ WSGI_APPLICATION = 'speakpro.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'speakpro',  # Tên cơ sở dữ liệu bạn đã tạo
+        'USER': 'root',    # Tên người dùng MySQL
+        'PASSWORD': '123456',  # Mật khẩu MySQL
+        'HOST': 'localhost',      # Hoặc IP của máy chủ MySQL nếu không cài đặt trên máy cục bộ
+        'PORT': '3306',           # Cổng MySQL mặc định
     }
 }
 
