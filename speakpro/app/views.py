@@ -16,6 +16,9 @@ from .serializers import ResetPasswordSerializer
 def home(request):
     return HttpResponse("Speakpro")
 
+# ==============================================================================
+#                         AUTHENTICATION & USER MANAGEMENT VIEWS
+# ==============================================================================
 class RegisterView(APIView):
     def post(self, request):
         data = request.data
@@ -141,4 +144,124 @@ class ResetPasswordView(APIView):
         cache.delete(f"password_reset_code_{email}")
 
         return Response({'message': 'Password has been reset successfully!'}, status=status.HTTP_200_OK)
+
+# ==============================================================================
+#                         USER PROGRESS & HISTORY VIEWS
+# ==============================================================================
+from rest_framework.generics import ListCreateAPIView # Dùng view này
+from rest_framework.permissions import IsAuthenticated # Yêu cầu đăng nhập
+from .models import UserPracticeLog, SpeakingText # Import model mới
+from .serializers import UserPracticeLogSerializer # Import serializer mới
+class UserPracticeLogView(ListCreateAPIView):
+    """
+    API endpoint để:
+    - GET: Lấy lịch sử luyện tập của người dùng đang đăng nhập.
+    - POST: Ghi lại một lượt luyện tập mới của người dùng đang đăng nhập.
+
+    Khi POST, cần cung cấp:
+    - speaking_text_id: ID của bài SpeakingText đã luyện tập.
+    - score: Điểm số (nếu có).
+    - details: Chi tiết JSON/text (nếu có).
+    """
+    serializer_class = UserPracticeLogSerializer
+    permission_classes = [IsAuthenticated] # Bắt buộc đăng nhập để xem/ghi lịch sử
+
+    def get_queryset(self):
+        """
+        Chỉ trả về lịch sử của người dùng đang đăng nhập.
+        Sắp xếp theo ngày mới nhất.
+        """
+        user = self.request.user
+        # select_related giúp tối ưu query, lấy thông tin user và speaking_text cùng lúc
+        return UserPracticeLog.objects.filter(user=user).select_related('user', 'speaking_text', 'speaking_text__genre')
+
+    def perform_create(self, serializer):
+        """
+        Tự động gán người dùng đang đăng nhập vào trường 'user' khi tạo log mới.
+        """
+        serializer.save(user=self.request.user)
             
+# ==============================================================================
+#                         SPEAKPRO CORE API VIEWS
+# ==============================================================================
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Genre, SpeakingText, Audio
+from .serializers import GenreSerializer, SpeakingTextSerializer, AudioSerializer
+from django.http import HttpResponse
+from rest_framework.generics import ListAPIView
+from rest_framework.filters import SearchFilter
+
+
+
+# API để lấy danh sách tất cả thể loại
+class GenreListView(APIView):
+    def get(self, request):
+        genres = Genre.objects.all()
+        serializer = GenreSerializer(genres, many=True)
+        return Response(serializer.data)
+
+# API để lấy thể loại theo id
+class GenreDetailView(APIView):
+    def get(self, request, pk):
+        try:
+            genre = Genre.objects.get(pk=pk)
+        except Genre.DoesNotExist:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        serializer = GenreSerializer(genre)
+        return Response(serializer.data)
+
+class SpeakingTextListView(APIView):
+    def get(self, request):
+        texts = SpeakingText.objects.all()
+        serializer = SpeakingTextSerializer(texts, many=True)
+        return Response(serializer.data)
+
+# API để lấy đoạn văn mẫu theo id
+class SpeakingTextDetailView(APIView):
+    def get(self, request, pk):
+        try:
+            text = SpeakingText.objects.get(pk=pk)
+        except SpeakingText.DoesNotExist:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        serializer = SpeakingTextSerializer(text)
+        return Response(serializer.data)
+
+# API để lấy danh sách tất cả audio
+class AudioListView(APIView):
+    def get(self, request):
+        audios = Audio.objects.all()
+        serializer = AudioSerializer(audios, many=True)
+        return Response(serializer.data)
+
+# API để lấy audio theo id
+class AudioDetailView(APIView):
+    def get(self, request, pk):
+        try:
+            audio = Audio.objects.get(pk=pk)
+        except Audio.DoesNotExist:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        serializer = AudioSerializer(audio)
+        return Response(serializer.data)
+
+# API View để tìm kiếm SpeakingText (Topics)
+class SpeakingTextSearchView(ListAPIView):
+
+    queryset = SpeakingText.objects.select_related('genre').all() # Tối ưu query bằng select_related
+    serializer_class = SpeakingTextSerializer
+
+    # Sử dụng bộ lọc SearchFilter của DRF
+    filter_backends = [SearchFilter]
+    # Chỉ định các trường sẽ được tìm kiếm
+    # 'title': tìm trong trường title của SpeakingText
+    # 'genre__name': tìm trong trường name của model Genre liên quan
+    # (sử dụng __ để truy cập trường của related model)
+    # Tiền tố '^', '=', '@', '$' có thể được dùng để thay đổi kiểu search (starts-with, exact, full-text, regex)
+    # Mặc định là tìm kiếm chứa (case-insensitive contains)
+    search_fields = ['title', 'genre__name']
+
