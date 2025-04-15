@@ -72,7 +72,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
 ]
 CORS_ALLOWED_ORIGINS = [
-    'http://localhost:3000',  # URL của React FE
+    'http://localhost:8080',  # URL của React FE
 ]
 ROOT_URLCONF = 'speakpro.urls'
 

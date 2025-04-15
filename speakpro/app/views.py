@@ -22,45 +22,48 @@ def home(request):
 class RegisterView(APIView):
     def post(self, request):
         data = request.data
-        username = data.get('email')
-        password = data.get('password')
-        confirm_password = data.get('confirm_password')
-        first_name = data.get('first_name', '')
-        last_name = data.get('last_name', '')
 
+        username = data.get('username')  # Get username from input
+        email = data.get('email')  # Get email address
+        password = data.get('password')  # Get password
+        confirm_password = data.get('confirm_password')  # Get confirm password
+
+        # Check if passwords match
         if password != confirm_password:
             return Response({'error': 'Passwords do not match!'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if User.objects.filter(username=username).exists():
+        # Check if email already exists
+        if User.objects.filter(email=email).exists():
             return Response({'error': 'Email already exists!'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Create the new user
         user = User.objects.create_user(
-            username=username,
-            email=username,
-            password=password,
-            first_name=first_name,
-            last_name=last_name
+            username=username,  # Username is now the unique identifier
+            email=email,  # Email used for login and notifications
+            password=password
         )
+
         return Response({'message': 'User registered successfully!'}, status=status.HTTP_201_CREATED)
     
+
 class LoginView(APIView):
     def post(self, request):
         data = request.data
-        email = data.get('email')
-        password = data.get('password')
+        username = data.get('username')  # Lấy username từ dữ liệu
+        password = data.get('password')  # Lấy mật khẩu từ dữ liệu
 
         try:
-            # Lookup user by email
-            user = User.objects.get(email=email)
+            # Tìm kiếm người dùng dựa trên username
+            user = User.objects.get(username=username)
 
-            # Authenticate using the user's username
+            # Xác thực người dùng bằng username và mật khẩu
             auth_user = authenticate(request, username=user.username, password=password)
 
             if auth_user is None:
                 return Response({'message': 'Invalid password!'}, 
                                 status=status.HTTP_401_UNAUTHORIZED)
 
-            # Generate token
+            # Tạo token
             refresh = RefreshToken.for_user(auth_user)
             return Response({
                 'token': str(refresh.access_token),
@@ -74,9 +77,8 @@ class LoginView(APIView):
             }, status=status.HTTP_200_OK)
 
         except User.DoesNotExist:
-            return Response({'message': 'User with this email does not exist!'}, 
+            return Response({'message': 'User with this username does not exist!'}, 
                             status=status.HTTP_401_UNAUTHORIZED)
-
 class LogoutView(APIView):
     def post(self, request):
         try:
