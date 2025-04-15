@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import home, RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView, SpeakingTextSearchView, UserPracticeLogView
+from .views import home, RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView, SpeakingTextSearchView, UserPracticeLogView, DashboardStatsView
 from .views import GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView
 from django.conf import settings
 from django.conf.urls.static import static
@@ -15,10 +15,11 @@ urlpatterns = [
     path('speaking-texts/search/', SpeakingTextSearchView.as_view(), name='speaking-text-search'),
     # User Progress & History URL
     path('practice-logs/', UserPracticeLogView.as_view(), name='user-practice-log-list-create'),
+    # --- Dashboard Stats URL ---
+    path('dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
     # Thể loại
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),
-
     # Đoạn văn mẫu
     path('speaking-texts/', SpeakingTextListView.as_view(), name='speaking-text-list'),
     path('speaking-texts/<int:pk>/', SpeakingTextDetailView.as_view(), name='speaking-text-detail'),

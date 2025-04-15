@@ -180,6 +180,53 @@ class UserPracticeLogView(ListCreateAPIView):
         Tự động gán người dùng đang đăng nhập vào trường 'user' khi tạo log mới.
         """
         serializer.save(user=self.request.user)
+
+# ==============================================================================
+#                            DASHBOARD & STATS VIEWS
+# ==============================================================================
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from datetime import timedelta
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAdminUser
+from .models import UserPracticeLog
+User = get_user_model()
+
+class DashboardStatsView(APIView):
+    """
+    API endpoint lấy số liệu thống kê cho dashboard, sử dụng dữ liệu từ
+    bảng `auth_user` và `app_userpracticelog`.
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request, format=None):
+        # 1. Tính Total Users: Đếm tất cả các dòng trong bảng `auth_user`
+        total_users = User.objects.count()
+
+        # 2. Tính Active Users: Đếm các dòng trong `auth_user` có trường `is_active` = True
+        active_users = User.objects.filter(is_active=True).count()
+
+        # 3. Tính Recent Activity Users:
+        # Đếm số user_id *riêng biệt* trong `app_userpracticelog`
+        # có `practice_date` trong vòng 7 ngày qua.
+        recent_days = 7
+        cutoff_date = timezone.now() - timedelta(days=recent_days)
+
+        recent_activity_users = UserPracticeLog.objects.filter(
+            practice_date__gte=cutoff_date
+        ).values('user').distinct().count() # Dùng FK 'user' liên kết đến auth_user
+
+        # Dữ liệu trả về cho Frontend
+        data = {
+            'total_users': total_users,
+            'active_users': active_users,
+            'recent_activity_users': recent_activity_users,
+            'recent_activity_days': recent_days
+        }
+
+        return Response(data)
+
             
 # ==============================================================================
 #                         SPEAKPRO CORE API VIEWS
