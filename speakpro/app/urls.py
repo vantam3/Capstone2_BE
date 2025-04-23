@@ -1,25 +1,53 @@
 from django.urls import path
-from .views import GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView
+from .views import  GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView,UserListView
 from django.conf import settings
 from django.conf.urls.static import static
+from .views import home
+from . import views
 
 urlpatterns = [
-    # Thể loại
+    path('', home, name='home'),
+    path('users/', UserListView.as_view(), name='user-list'),  
+
+    # GENRES
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),
 
-    # Đoạn văn mẫu
+    # TEXT
     path('speaking-texts/', SpeakingTextListView.as_view(), name='speaking-text-list'),
     path('speaking-texts/<int:pk>/', SpeakingTextDetailView.as_view(), name='speaking-text-detail'),
 
-    # Âm thanh
+    #AUDIO
     path('audios/', AudioListView.as_view(), name='audio-list'),
     path('audios/<int:pk>/', AudioDetailView.as_view(), name='audio-detail'),
-]
-# Cung cấp các tệp media trong môi trường phát triển
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # path('api/speech-to-text/', SpeechToTextAPIView.as_view(), name='speech_to_text'),
     
+    #CRUD text
+    path('api/add/', views.SpeakingTextCreateAPIView.as_view(), name='add_speaking_text'),
+    path('api/update/<int:id>/', views.SpeakingTextUpdateAPIView.as_view(), name='edit_speaking_text'),
+    path('api/delete/<int:id>/', views.SpeakingTextDeleteAPIView.as_view(), name='delete_speaking_text'),
+    
+    #user
+    path('api/users/create/', views.UserCreateAPIView.as_view(), name='create-user'),
+    path('api/users/update/<int:id>/', views.UserUpdateAPIView.as_view(), name='update-user'),
+    path('api/users/delete/<int:id>/', views.UserDeleteAPIView.as_view(), name='delete-user'),
+
+    path('levels/', views.LevelListAPIView.as_view(), name='list-levels'),
+    path('speaking-texts/filter/', views.SpeakingTextFilterAPIView.as_view(), name='filter-speaking-texts'),
+    path('upload-user-audio/', views.upload_user_audio, name='upload_user_audio'),
+
+    path('api/submit-speaking/', views.SubmitSpeakingAPIView.as_view(), name='submit-speaking'),
+
+]    + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    
+
+
+
+
+
+
+
+
 
 # from app.models import Audio, SpeakingText
 
