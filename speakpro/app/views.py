@@ -23,10 +23,10 @@ class RegisterView(APIView):
     def post(self, request):
         data = request.data
 
-        username = data.get('username')  # Get username from input
-        email = data.get('email')  # Get email address
-        password = data.get('password')  # Get password
-        confirm_password = data.get('confirm_password')  # Get confirm password
+        username = data.get('username') 
+        email = data.get('email')
+        password = data.get('password')  
+        confirm_password = data.get('confirm_password') 
 
         # Check if passwords match
         if password != confirm_password:
@@ -49,8 +49,8 @@ class RegisterView(APIView):
 class LoginView(APIView):
     def post(self, request):
         data = request.data
-        username = data.get('username')  # Lấy username từ dữ liệu
-        password = data.get('password')  # Lấy mật khẩu từ dữ liệu
+        username = data.get('username')  
+        password = data.get('password')  
 
         try:
             # Tìm kiếm người dùng dựa trên username
@@ -150,10 +150,10 @@ class ResetPasswordView(APIView):
 # ==============================================================================
 #                         USER PROGRESS & HISTORY VIEWS
 # ==============================================================================
-from rest_framework.generics import ListCreateAPIView # Dùng view này
-from rest_framework.permissions import IsAuthenticated # Yêu cầu đăng nhập
-from .models import UserPracticeLog, SpeakingText # Import model mới
-from .serializers import UserPracticeLogSerializer # Import serializer mới
+from rest_framework.generics import ListCreateAPIView 
+from rest_framework.permissions import IsAuthenticated 
+from .models import UserPracticeLog, SpeakingText 
+from .serializers import UserPracticeLogSerializer 
 class UserPracticeLogView(ListCreateAPIView):
     """
     API endpoint để:
@@ -162,8 +162,8 @@ class UserPracticeLogView(ListCreateAPIView):
 
     Khi POST, cần cung cấp:
     - speaking_text_id: ID của bài SpeakingText đã luyện tập.
-    - score: Điểm số (nếu có).
-    - details: Chi tiết JSON/text (nếu có).
+    - score: Điểm số.
+    - details: Chi tiết JSON/text .
     """
     serializer_class = UserPracticeLogSerializer
     permission_classes = [IsAuthenticated] # Bắt buộc đăng nhập để xem/ghi lịch sử

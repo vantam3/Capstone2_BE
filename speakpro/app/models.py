@@ -38,7 +38,7 @@ class UserPracticeLog(models.Model):
     # Liên kết với bài nói đã được luyện tập
     speaking_text = models.ForeignKey(
         SpeakingText,
-        on_delete=models.CASCADE, # Hoặc models.SET_NULL nếu muốn giữ log khi bài nói bị xóa
+        on_delete=models.CASCADE, 
         related_name='practice_logs'
     )
     # Thời điểm thực hiện luyện tập
