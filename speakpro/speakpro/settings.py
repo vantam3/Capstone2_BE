@@ -27,9 +27,8 @@ SECRET_KEY = 'django-insecure-i^b1(h79#a5&%h7^zg$=h6_189%%)2r@$+32kvs1&i8r*fc*qm
 DEBUG = True
 
 ALLOWED_HOSTS = []
-
 CORS_ALLOWED_ORIGINS = [
-    'http://localhost:3000',  # URL của React FE
+    'http://localhost:8080',  # URL của React FE
 ]
 # settings.py
 # Cài đặt CORS
@@ -38,12 +37,16 @@ CORS_ALLOWED_ORIGINS = [
 import os
 
 # Đường dẫn đến thư mục lưu trữ tệp media (local storage)
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+import os
 
-# URL mà tệp media có thể truy cập được
-MEDIA_URL = '/media/'
+# Cấu hình MEDIA_ROOT để Django có thể truy cập đúng thư mục chứa tệp media
+MEDIA_URL = '/media/'  # URL để truy cập các tệp media từ frontend
+
+# Đảm bảo MEDIA_ROOT trỏ đến đúng thư mục 'media' trong app của bạn
+MEDIA_ROOT = os.path.join(BASE_DIR, 'app', 'media')
 
 # Application definition
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -68,9 +71,11 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-
+    
     'corsheaders.middleware.CorsMiddleware',
 ]
+CORS_ORIGIN_ALLOW_ALL = True  # Or specify origins if you want to restrict
+
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:8080',  # URL của React FE
 ]
