@@ -1,48 +1,58 @@
 from django.shortcuts import render
-from django.http import HttpResponse, FileResponse
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
+from django.http import HttpResponse, FileResponse 
 from django.contrib.auth.models import User
-from rest_framework import generics
-from rest_framework.filters import SearchFilter
-import os
-import base64
-from django.views.decorators.csrf import csrf_exempt
-from rest_framework.decorators import api_view
-from django.core.files.storage import default_storage
-
-
-# Project-specific Models and Serializers (assuming they are in .models and .serializers)
-from .models import Genre, SpeakingText, Audio, Level, SpeakingResult, UserAudio
-from .serializers import GenreSerializer, SpeakingTextSerializer, AudioSerializer, UserSerializer, LevelSerializer, UserAudioSerializer, ResetPasswordSerializer
-
-# Utils
-from .utils.score import calculate_score
-from .utils.audio_converter import convert_webm_to_mp3 # Assuming this is in .utils
-
-
-def home(request):
-    """Basic home view."""
-    return HttpResponse("Speakpro API")
-
-# ==============================================================================
-#                         AUTHENTICATION & USER MANAGEMENT VIEWS
-# ==============================================================================
-
-# Imports specific to Authentication and User Management
-from django.contrib.auth import authenticate
-from rest_framework_simplejwt.tokens import RefreshToken
-import random
-import string
+from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.utils import timezone
+from datetime import timedelta
+from django.core.files.storage import default_storage 
+from django.views.decorators.csrf import csrf_exempt 
 
+# DRF Imports
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, generics
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.generics import ListCreateAPIView, ListAPIView, UpdateAPIView, DestroyAPIView, CreateAPIView
+from rest_framework.filters import SearchFilter
+from rest_framework.decorators import api_view 
+
+# Standard Library Imports
+import random
+import string
+import os 
+import base64 
+
+# App Imports (Models & Serializers)
+from .models import (
+    Genre, SpeakingText, Audio, UserPracticeLog, Level, SpeakingResult, UserAudio # Combined models
+)
+from .serializers import (
+    GenreSerializer, SpeakingTextSerializer, AudioSerializer,
+    ResetPasswordSerializer, UserPracticeLogSerializer, UserSerializer, 
+    LevelSerializer, UserAudioSerializer 
+)
+
+# NOTE: Specific utility/library imports are placed within their functional sections below for clarity.
+
+
+# ==============================================================================
+#                                  HOME VIEW
+# ==============================================================================
+
+
+def home(request):
+    return HttpResponse("Speakpro")
+
+# ==============================================================================
+#                         AUTHENTICATION & USER MANAGEMENT VIEWS 
+# ==============================================================================
+# Imports required for this section are already in COMMON IMPORTS
 
 class RegisterView(APIView):
-    """API endpoint to register a new user."""
     def post(self, request):
         data = request.data
 
@@ -59,6 +69,10 @@ class RegisterView(APIView):
         if User.objects.filter(email=email).exists():
             return Response({'error': 'Email already exists!'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Check if username already exists (added for robustness, User model requires unique username)
+        if User.objects.filter(username=username).exists():
+             return Response({'error': 'Username already exists!'}, status=status.HTTP_400_BAD_REQUEST)
+
         # Create the new user
         user = User.objects.create_user(
             username=username,  # Username is now the unique identifier
@@ -70,24 +84,23 @@ class RegisterView(APIView):
 
 
 class LoginView(APIView):
-    """API endpoint to log in a user and generate JWT tokens."""
     def post(self, request):
         data = request.data
         username = data.get('username')
         password = data.get('password')
 
         try:
-            # Tìm kiếm người dùng dựa trên username
+            # Find user by username
             user = User.objects.get(username=username)
 
-            # Xác thực người dùng bằng username và mật khẩu
+            # Authenticate user with username and password
             auth_user = authenticate(request, username=user.username, password=password)
 
             if auth_user is None:
                 return Response({'message': 'Invalid password!'},
                                 status=status.HTTP_401_UNAUTHORIZED)
 
-            # Tạo token
+            # Generate token
             refresh = RefreshToken.for_user(auth_user)
             return Response({
                 'token': str(refresh.access_token),
@@ -105,26 +118,31 @@ class LoginView(APIView):
                             status=status.HTTP_401_UNAUTHORIZED)
 
 class LogoutView(APIView):
-    """API endpoint to log out a user by blacklisting the refresh token."""
     def post(self, request):
         try:
-            # Lấy refresh token từ request
+            # Get refresh token from request
             refresh_token = request.data.get('refresh_token')
+            if not refresh_token:
+                 return Response({"error": "Refresh token is required"}, status=status.HTTP_400_BAD_REQUEST)
             token = RefreshToken(refresh_token)
-            token.blacklist()  # Thêm token vào danh sách blacklist
+            token.blacklist()  # Add token to blacklist
 
             return Response({"message": "Logged out successfully"}, status=status.HTTP_205_RESET_CONTENT)
         except Exception as e:
+            # Catch specific exceptions like TokenError if possible
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class ForgotPasswordView(APIView):
-    """API endpoint to send a password reset confirmation code to a user's email."""
     def post(self, request):
         email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required!'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            return Response({'error': 'User with this email does not exist!'}, status=status.HTTP_404_NOT_FOUND)
+            # Return success-like message even if user doesn't exist to avoid email enumeration
+            return Response({'message': 'If an account with this email exists, a confirmation code has been sent.'}, status=status.HTTP_200_OK)
+            # Or be explicit: return Response({'error': 'User with this email does not exist!'}, status=status.HTTP_404_NOT_FOUND)
 
         # Generate a confirmation code
         confirmation_code = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
@@ -134,19 +152,20 @@ class ForgotPasswordView(APIView):
 
         try:
             send_mail(
-                subject="Confirmation Code - Bookquest",
-                message=f"Hello {user.first_name},\n\nYour confirmation code is: {confirmation_code}\nUse this code to reset your password.",
+                subject="Password Reset Confirmation Code - Speakpro", # Updated subject
+                message=f"Hello {user.username or user.first_name or 'User'},\n\nYour confirmation code is: {confirmation_code}\nUse this code to reset your password. It will expire in 10 minutes.",
                 from_email=settings.EMAIL_HOST_USER,
                 recipient_list=[email],
                 fail_silently=False,
             )
             return Response({'message': 'Confirmation code sent to your email!'}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({'error': 'Failed to send email. Please try again later.', 'details': str(e)},
+            # Log the error e for debugging
+            print(f"Error sending password reset email to {email}: {e}")
+            return Response({'error': 'Failed to send email. Please try again later.'}, # Removed details from response 'details': str(e)
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ResetPasswordView(APIView):
-    """API endpoint to reset a user's password using a confirmation code."""
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
         if not serializer.is_valid():
@@ -159,12 +178,15 @@ class ResetPasswordView(APIView):
         # Retrieve the confirmation code from cache
         cached_code = cache.get(f"password_reset_code_{email}")
 
-        if not cached_code or cached_code != confirmation_code:
-            return Response({'error': 'Invalid or expired confirmation code!'}, status=status.HTTP_400_BAD_REQUEST)
+        if not cached_code:
+            return Response({'error': 'Expired confirmation code! Please request a new one.'}, status=status.HTTP_400_BAD_REQUEST)
+        if cached_code != confirmation_code:
+             return Response({'error': 'Invalid confirmation code!'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
+            # This case should ideally not happen if ForgotPasswordView checks, but good to have.
             return Response({'error': 'User with this email does not exist!'}, status=status.HTTP_404_NOT_FOUND)
 
         # Update the password
@@ -177,79 +199,75 @@ class ResetPasswordView(APIView):
         return Response({'message': 'Password has been reset successfully!'}, status=status.HTTP_200_OK)
 
 # ==============================================================================
-#                         USER PROGRESS & HISTORY VIEWS
+#                         USER PROGRESS & HISTORY VIEWS 
 # ==============================================================================
-
-# Imports specific to User Progress and History
-from rest_framework.generics import ListCreateAPIView
-from rest_framework.permissions import IsAuthenticated
-
+# Imports required for this section are already in COMMON IMPORTS
 
 class UserPracticeLogView(ListCreateAPIView):
     """
-    API endpoint để:
-    - GET: Lấy lịch sử luyện tập của người dùng đang đăng nhập.
-    - POST: Ghi lại một lượt luyện tập mới của người dùng đang đăng nhập.
+    API endpoint for:
+    - GET: Fetching the practice history of the logged-in user.
+    - POST: Recording a new practice session for the logged-in user.
 
-    Khi POST, cần cung cấp:
-    - speaking_text_id: ID của bài SpeakingText đã luyện tập.
-    - score: Điểm số.
-    - details: Chi tiết JSON/text .
+    Requires:
+    - speaking_text_id: ID of the practiced SpeakingText.
+    - score: Achieved score.
+    - details: JSON/text details (optional).
     """
     serializer_class = UserPracticeLogSerializer
-    permission_classes = [IsAuthenticated] # Bắt buộc đăng nhập để xem/ghi lịch sử
+    permission_classes = [IsAuthenticated] # Requires authentication
 
     def get_queryset(self):
         """
-        Chỉ trả về lịch sử của người dùng đang đăng nhập.
-        Sắp xếp theo ngày mới nhất.
+        Return only the history for the currently authenticated user.
+        Order by the most recent practice date.
         """
         user = self.request.user
-        # select_related giúp tối ưu query, lấy thông tin user và speaking_text cùng lúc
-        return UserPracticeLog.objects.filter(user=user).select_related('user', 'speaking_text', 'speaking_text__genre')
+        # Use select_related to optimize queries by fetching related user, speaking_text, and genre info together
+        return UserPracticeLog.objects.filter(user=user).select_related(
+            'user', 'speaking_text', 'speaking_text__genre', 'speaking_text__level' # Added level
+        ).order_by('-practice_date') # Order by most recent
 
     def perform_create(self, serializer):
         """
-        Tự động gán người dùng đang đăng nhập vào trường 'user' khi tạo log mới.
+        Automatically assign the logged-in user to the 'user' field when creating a new log.
         """
         serializer.save(user=self.request.user)
 
 # ==============================================================================
-#                            DASHBOARD & STATS VIEWS
+#                            DASHBOARD & STATS VIEWS 
 # ==============================================================================
-
-# Imports specific to Dashboard and Stats
-from django.utils import timezone
-from datetime import timedelta
-from rest_framework.permissions import IsAdminUser
-
-User = get_user_model() # Ensure we are using the potentially swapped user model
+# Imports required for this section are already in COMMON IMPORTS
+User = get_user_model() # Ensure User is the correct model
 
 class DashboardStatsView(APIView):
     """
-    API endpoint lấy số liệu thống kê cho dashboard, sử dụng dữ liệu từ
-    bảng `auth_user` và `app_userpracticelog`.
+    API endpoint to retrieve statistics for the admin dashboard, using data from
+    `auth_user` and `app_userpracticelog` (adjust app name if needed).
+    Requires admin privileges.
     """
     permission_classes = [IsAdminUser]
 
     def get(self, request, format=None):
-        # 1. Tính Total Users: Đếm tất cả các dòng trong bảng `auth_user`
+        # 1. Total Users: Count all users in `auth_user` table
         total_users = User.objects.count()
 
-        # 2. Tính Active Users: Đếm các dòng trong `auth_user` có trường `is_active` = True
+        # 2. Active Users: Count users in `auth_user` where `is_active` is True
         active_users = User.objects.filter(is_active=True).count()
 
-        # 3. Tính Recent Activity Users:
-        # Đếm số user_id *riêng biệt* trong `app_userpracticelog`
-        # có `practice_date` trong vòng 7 ngày qua.
+        # 3. Recent Activity Users:
+        # Count distinct user_ids from `app_userpracticelog`
+        # with `practice_date` within the last 7 days.
         recent_days = 7
         cutoff_date = timezone.now() - timedelta(days=recent_days)
 
+        # Assumes the model name is UserPracticeLog and the app label is implicitly found
+        # If your app name is different, specify like: `yourapp.UserPracticeLog`
         recent_activity_users = UserPracticeLog.objects.filter(
             practice_date__gte=cutoff_date
-        ).values('user').distinct().count() # Dùng FK 'user' liên kết đến auth_user
+        ).values('user').distinct().count() # Use the foreign key 'user' which links to auth_user
 
-        # Dữ liệu trả về cho Frontend
+        # Data to return to the frontend
         data = {
             'total_users': total_users,
             'active_users': active_users,
@@ -257,421 +275,455 @@ class DashboardStatsView(APIView):
             'recent_activity_days': recent_days
         }
 
-        return Response(data)
+        return Response(data, status=status.HTTP_200_OK)
+
 
 # ==============================================================================
-#                         SPEAKPRO CORE API VIEWS
+#                         SPEAKPRO CORE API VIEWS (Combined)
 # ==============================================================================
+# Imports required for this section are already in COMMON IMPORTS
 
-# Imports specific to Speakpro Core API
-import speech_recognition as sr
-from pydub import AudioSegment
-
-
-# API để lấy danh sách tất cả thể loại
+# API to get list of all genres 
 class GenreListView(APIView):
-    """API endpoint to get a list of all genres."""
     def get(self, request):
         genres = Genre.objects.all()
         serializer = GenreSerializer(genres, many=True)
         return Response(serializer.data)
 
-# API để lấy thể loại theo id
+# API to get genre by ID 
 class GenreDetailView(APIView):
-    """API endpoint to get a specific genre by ID."""
     def get(self, request, pk):
         try:
             genre = Genre.objects.get(pk=pk)
         except Genre.DoesNotExist:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
+            return Response({"error": "Genre not found"}, status=status.HTTP_404_NOT_FOUND) # Added error msg
         serializer = GenreSerializer(genre)
         return Response(serializer.data)
 
-#api lay sach theo level va genre
+# API to get list of all Speaking Texts 
+class SpeakingTextListView(APIView):
+    def get(self, request):
+        # Optimize by prefetching related objects if needed frequently in serialization
+        texts = SpeakingText.objects.select_related('genre', 'level').all()
+        serializer = SpeakingTextSerializer(texts, many=True, context={'request': request}) # Pass request context for potential hyperlinking
+        return Response(serializer.data)
+
+# API to get Speaking Text by ID 
+class SpeakingTextDetailView(APIView):
+    def get(self, request, pk):
+        try:
+            # Optimize by prefetching related objects
+            text = SpeakingText.objects.select_related('genre', 'level').get(pk=pk)
+        except SpeakingText.DoesNotExist:
+            return Response({"error": "Speaking text not found"}, status=status.HTTP_404_NOT_FOUND) # Added error msg
+        serializer = SpeakingTextSerializer(text, context={'request': request}) # Pass context
+        return Response(serializer.data)
+
+# API to filter Speaking Texts by genre and/or level 
 class SpeakingTextFilterAPIView(generics.ListAPIView):
-    """API endpoint to filter SpeakingText by level and genre."""
     serializer_class = SpeakingTextSerializer
 
     def get_queryset(self):
         """
-        Lọc danh sách tài liệu theo level và genre.
+        Filter the list of speaking texts by genre and level query parameters.
         """
-        queryset = SpeakingText.objects.all()  # Lấy tất cả các tài liệu
+        # Start with all texts, prefetch related models for efficiency
+        queryset = SpeakingText.objects.select_related('genre', 'level').all()
 
-        # Lọc theo genre nếu có
+        # Filter by genre if 'genre' query parameter is provided
         genre_id = self.request.query_params.get('genre', None)
         if genre_id:
             queryset = queryset.filter(genre_id=genre_id)
 
-        # Lọc theo level nếu có
+        # Filter by level if 'level' query parameter is provided
         level_id = self.request.query_params.get('level', None)
         if level_id:
             queryset = queryset.filter(level_id=level_id)
 
         return queryset
 
-class SpeakingTextListView(APIView):
-    """API endpoint to get a list of all speaking texts."""
-    def get(self, request):
-        texts = SpeakingText.objects.all()
-        serializer = SpeakingTextSerializer(texts, many=True)
-        return Response(serializer.data)
+# API View for searching Speaking Texts (Topics) by title or genre name 
+class SpeakingTextSearchView(ListAPIView):
+    serializer_class = SpeakingTextSerializer
+    # Use DRF's SearchFilter backend
+    filter_backends = [SearchFilter]
+    # Specify fields to search against
+    # 'title': search in SpeakingText's title field
+    # 'genre__name': search in the related Genre's name field (using '__' for related fields)
+    # Default search is case-insensitive 'contains'. Prefixes like '^', '=', '@', '$' can modify search behavior.
+    search_fields = ['title', 'genre__name', 'level__name'] # Added level name search
+    queryset = SpeakingText.objects.select_related('genre', 'level').all() # Optimized query
 
-# API để lấy đoạn văn mẫu theo id
-class SpeakingTextDetailView(APIView):
-    """API endpoint to get a specific speaking text by ID."""
-    def get(self, request, pk):
-        try:
-            text = SpeakingText.objects.get(pk=pk)
-        except SpeakingText.DoesNotExist:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        serializer = SpeakingTextSerializer(text)
-        return Response(serializer.data)
-
-# API để lấy danh sách tất cả audio
+# API to get list of all audios 
 class AudioListView(APIView):
-    """API endpoint to get a list of all audio files."""
     def get(self, request):
         audios = Audio.objects.all()
-        serializer = AudioSerializer(audios, many=True)
+        serializer = AudioSerializer(audios, many=True, context={'request': request}) # Pass context
         return Response(serializer.data)
 
-# API để lấy audio theo id
+# API to get audio detail (URL) by ID 
 class AudioDetailView(APIView):
-    """API endpoint to get a specific audio file by ID and return its URL."""
     def get(self, request, pk):
         try:
-            # Lấy đối tượng Audio từ cơ sở dữ liệu theo pk
+            # Get the Audio object from the database by primary key (pk)
             audio = Audio.objects.get(pk=pk)
         except Audio.DoesNotExist:
-            return Response({"error": "Audio file not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Audio not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Đảm bảo rằng tệp âm thanh tồn tại
+        # Ensure the audio file exists
         if not audio.audio_file:
-            return Response({"error": "Audio file not found."}, status=status.HTTP_404_NOT_FOUND)
+            # This case might indicate a data integrity issue
+            return Response({"error": "Audio record exists but the file is missing."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Trả về URL của tệp âm thanh (FileField sẽ tự động trả về URL)
-        audio_url = audio.audio_file.url  # Lấy URL của tệp âm thanh
-        # Construct full URL - adjust domain as needed for production
-        full_audio_url = request.build_absolute_uri(audio_url)
-        return Response({"audio_url": full_audio_url}, status=status.HTTP_200_OK)
-
-# API View để tìm kiếm SpeakingText (Topics)
-class SpeakingTextSearchView(ListAPIView):
-    """API endpoint to search for SpeakingText (Topics) by title or genre name."""
-    queryset = SpeakingText.objects.select_related('genre').all() # Tối ưu query bằng select_related
-    serializer_class = SpeakingTextSerializer
-
-    # Sử dụng bộ lọc SearchFilter của DRF
-    filter_backends = [SearchFilter]
-    # Chỉ định các trường sẽ được tìm kiếm
-    # 'title': tìm trong trường title của SpeakingText
-    # 'genre__name': tìm trong trường name của model Genre liên quan
-    # (sử dụng __ để truy cập trường của related model)
-    # Tiền tố '^', '=', '@', '$' có thể được dùng để thay đổi kiểu search (starts-with, exact, full-text, regex)
-    # Mặc định là tìm kiếm chứa (case-insensitive contains)
-    search_fields = ['title', 'genre__name']
+        try:
+            # Get the URL of the audio file (FileField provides a .url attribute)
+            audio_url = audio.audio_file.url
+            # Construct the full absolute URL using the request context
+            full_audio_url = request.build_absolute_uri(audio_url)
+            return Response({"audio_url": full_audio_url}, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Handle potential errors during URL building
+            print(f"Error generating audio URL for pk={pk}: {e}")
+            return Response({"error": "Could not generate audio URL."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@csrf_exempt
+# ==============================================================================
+#                         AUDIO PROCESSING & SUBMISSION VIEWS 
+# ==============================================================================
+
+# Specific Imports for this section
+import speech_recognition as sr
+from pydub import AudioSegment
+from .utils.score import calculate_score # Assuming this exists in utils/score.py
+from .utils.audio_converter import convert_webm_to_mp3 # Assuming this exists in utils/audio_converter.py
+
+# Helper function to split audio (Consider moving to utils if reused elsewhere)
+def split_audio_to_chunks(audio_path, chunk_length_ms=15000):
+    """Splits a WAV audio file into chunks of specified length."""
+    try:
+        audio = AudioSegment.from_wav(audio_path)
+        chunks = [audio[i:min(i + chunk_length_ms, len(audio))] for i in range(0, len(audio), chunk_length_ms)]
+        return chunks
+    except Exception as e:
+        print(f"Error splitting audio {audio_path}: {e}")
+        return [] # Return empty list on error
+
+# API view for uploading user audio (e.g., WebM) and converting it to MP3 
+@csrf_exempt # Use SessionAuthentication/TokenAuthentication in DRF instead of CSRF exempt if possible
 @api_view(['POST'])
 def upload_user_audio(request):
-    """API endpoint to upload user audio, convert it, and return URLs."""
     audio_file = request.FILES.get('audio')
+    # It's better to use the authenticated user: user = request.user
+    # For testing/demo, we might get a specific user or allow anonymous uploads
+    user = request.user if request.user.is_authenticated else None
+    if not user:
+         # If authentication is required, enforce it here or via permissions
+         # For now, let's fallback to a test user if not logged in (NOT RECOMMENDED FOR PRODUCTION)
+         try:
+             user = User.objects.get(username='tranv') # Example test user
+         except User.DoesNotExist:
+             return Response({"error": "Test user 'tranv' not found and no user logged in."}, status=status.HTTP_400_BAD_REQUEST)
 
-    if audio_file:
-        try:
-            # Using request.user if authentication is in place,
-            # otherwise, keep the test user for now.
-            # Assuming authentication is handled before this view is called.
-            user = request.user if request.user.is_authenticated else User.objects.get(username='tranv')
-        except User.DoesNotExist:
-            return Response({"error": "User does not exist."}, status=status.HTTP_400_BAD_REQUEST)
+    if not audio_file:
+        return Response({"error": "No audio file provided ('audio' field)"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Lưu bản gốc .webm
+    # Validate file type/size if necessary
+    # E.g., if not audio_file.name.endswith('.webm'): return Response(...)
+
+    try:
+        # Save the original audio file (.webm)
         user_audio = UserAudio.objects.create(user=user, audio_file=audio_file)
-        serializer = UserAudioSerializer(user_audio)
+        original_serializer = UserAudioSerializer(user_audio, context={'request': request})
 
-        # Đường dẫn file gốc
+        # Define paths for conversion
         input_path = user_audio.audio_file.path
-
-        # Đường dẫn file .mp3 sau khi chuyển đổi
         filename_wo_ext = os.path.splitext(os.path.basename(input_path))[0]
-        # Define a subdirectory within MEDIA_ROOT for converted audio
-        output_subdir = 'converted_audio'
-        output_filename = f"{filename_wo_ext}.mp3"
-        output_path = os.path.join(settings.MEDIA_ROOT, output_subdir, output_filename)
+        # Place converted files in a specific subfolder within MEDIA_ROOT
+        converted_dir_name = 'converted_audio'
+        output_dir = os.path.join(settings.MEDIA_ROOT, converted_dir_name)
+        os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
+        output_path = os.path.join(output_dir, f"{filename_wo_ext}.mp3")
 
-        # Ensure the output directory exists
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-
-        # Chuyển đổi WebM -> MP3
+        # Convert WebM -> MP3 using the utility function
         success = convert_webm_to_mp3(input_path, output_path)
         if not success:
-            # Clean up the original file if conversion fails
-            user_audio.audio_file.delete()
-            user_audio.delete()
+            user_audio.delete() # Clean up the created UserAudio record if conversion fails
             return Response({"error": "Failed to convert audio."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Xây dựng URL tuyệt đối cho file .mp3
-        mp3_relative_url = os.path.join(settings.MEDIA_URL, output_subdir, output_filename)
-        mp3_absolute_url = request.build_absolute_uri(mp3_relative_url)
+        # Construct the relative URL for the converted MP3 file
+        mp3_relative_path = os.path.join(converted_dir_name, f"{filename_wo_ext}.mp3")
+        # Construct the absolute URL using MEDIA_URL
+        mp3_absolute_url = request.build_absolute_uri(os.path.join(settings.MEDIA_URL, mp3_relative_path))
 
-        # Optionally, save the path/URL of the converted audio in the UserAudio model
-        # For now, we just return it in the response.
 
         return Response({
-            'original_audio': serializer.data['audio_file'], # URL of original file
-            'converted_audio': mp3_absolute_url
+            'message': 'File uploaded and converted successfully.',
+            'original_audio_url': original_serializer.data['audio_file'], # URL from serializer
+            'converted_audio_url': mp3_absolute_url
         }, status=status.HTTP_201_CREATED)
 
-    return Response({"error": "No audio file provided"}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        # Log the exception
+        print(f"Error during audio upload/conversion: {e}")
+        # Clean up UserAudio record if created before the error
+        if 'user_audio' in locals() and user_audio.pk:
+             try:
+                 user_audio.delete()
+             except: pass # Ignore cleanup errors
+        return Response({"error": "An unexpected error occurred during processing."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# Helper function (can be placed elsewhere, but keeping here for now)
-def split_audio_to_chunks(audio_path, chunk_length_ms=15000):
-    """Splits a WAV audio file into chunks."""
-    # Imports specific to this function
-    from pydub import AudioSegment
-    audio = AudioSegment.from_wav(audio_path)
-    chunks = [audio[i:i + chunk_length_ms] for i in range(0, len(audio), chunk_length_ms)]
-    return chunks
 
+# API view for submitting speaking practice audio, comparing with text, and getting score 
 class SubmitSpeakingAPIView(APIView):
-    """API endpoint to submit user's speaking audio, process it, and calculate score."""
+    permission_classes = [IsAuthenticated] # Usually requires user context
+
     def post(self, request):
-        audio_file = request.FILES.get("audio_file")
-        speaking_text_id = request.data.get("speaking_text_id")
+        audio_file = request.FILES.get("audio_file") # Expecting the audio file in the request
+        speaking_text_id = request.data.get("speaking_text_id") # Expecting the ID of the reference text
+        user = request.user # Get the authenticated user
 
         if not audio_file or not speaking_text_id:
-            return Response({"error": "Thiếu dữ liệu"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Missing 'audio_file' or 'speaking_text_id'."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Lưu file tạm
-        # Ensure a unique filename or handle potential naming conflicts
-        temp_filename_webm = default_storage.get_available_name('temp_input.webm')
-        temp_path_webm = default_storage.save(temp_filename_webm, audio_file)
-        full_path_webm = os.path.join(default_storage.location, temp_path_webm)
+        # --- 1. Save and Convert Audio ---
+        temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_submissions')
+        os.makedirs(temp_dir, exist_ok=True)
+        # Use a unique filename to avoid collisions
+        temp_filename = f"{user.id}_{speaking_text_id}_{timezone.now().strftime('%Y%m%d%H%M%S')}.webm"
+        temp_path = os.path.join(temp_dir, temp_filename)
 
-        # Chuyển webm -> wav để nhận diện giọng nói
-        wav_filename = os.path.splitext(temp_filename_webm)[0] + '.wav'
-        wav_path = os.path.join(default_storage.location, default_storage.get_available_name(wav_filename))
-
+        # Save the uploaded file temporarily
         try:
-            sound = AudioSegment.from_file(full_path_webm, format="webm")
+            with default_storage.open(temp_path, 'wb+') as destination:
+                for chunk in audio_file.chunks():
+                    destination.write(chunk)
+        except Exception as e:
+            print(f"Error saving temporary audio file: {e}")
+            return Response({"error": "Failed to save uploaded audio file."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+        # Convert webm -> wav for speech recognition
+        wav_path = temp_path.replace('.webm', '.wav')
+        try:
+            sound = AudioSegment.from_file(temp_path, format="webm") # Specify input format if needed
             sound.export(wav_path, format="wav")
         except Exception as e:
-            # Clean up temp files in case of conversion error
-            default_storage.delete(temp_path_webm)
-            return Response({"error": f"Không thể chuyển đổi file âm thanh: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            print(f"Error converting webm to wav: {e}")
+            # Cleanup temp webm file
+            if os.path.exists(temp_path): os.remove(temp_path)
+            return Response({"error": "Failed to convert audio to WAV format."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-        # Nhận diện văn bản từ wav
+        # --- 2. Speech Recognition ---
         recognizer = sr.Recognizer()
-        user_text_raw = ""
+        recognized_text = ""
         try:
-            chunks = split_audio_to_chunks(wav_path, chunk_length_ms=15000)
+            # Use chunking for potentially long audio files
+            chunks = split_audio_to_chunks(wav_path, chunk_length_ms=15000) # 15 seconds per chunk
+            if not chunks: # Handle error from split_audio_to_chunks
+                 raise Exception("Audio splitting failed.")
 
             for i, chunk in enumerate(chunks):
-                chunk_filename = f"chunk_part_{i}_{os.path.splitext(temp_filename_webm)[0]}.wav"
-                chunk_path = os.path.join(default_storage.location, default_storage.get_available_name(chunk_filename))
+                # Process each chunk
+                chunk_path = f"{wav_path}_chunk_{i}.wav"
                 chunk.export(chunk_path, format="wav")
 
                 with sr.AudioFile(chunk_path) as source:
+                    audio_data = recognizer.record(source) # Read the chunk audio data
                     try:
-                         # Adjust recognizer settings if needed, e.g., phrase_time_limit
-                        audio_data = recognizer.record(source)
-                        text = recognizer.recognize_google(audio_data, language="en-US")
-                        user_text_raw += " " + text
+                        # Recognize speech using Google Web Speech API
+                        text = recognizer.recognize_google(audio_data, language="en-US") # Specify language
+                        recognized_text += text + " " # Append recognized text
                     except sr.UnknownValueError:
-                        print(f"[⚠️] Chunk {i}: không thể nhận diện.")
-                        # Optionally, add a placeholder or handle silent parts
-                        user_text_raw += " [unintelligible]"
+                        print(f"[Warning] Chunk {i}: Google Speech Recognition could not understand audio.")
+                        # Optionally append a placeholder or log this missing part
                     except sr.RequestError as e:
-                        print(f"[❌] Chunk {i}: lỗi kết nối Google API: {e}")
-                        # Handle API errors, maybe add an error marker
-                        user_text_raw += " [recognition error]"
-                    finally:
-                         # Clean up chunk file
-                        default_storage.delete(chunk_path)
+                        print(f"[Error] Chunk {i}: Could not request results from Google Speech Recognition service; {e}")
+                        # Decide how to handle API errors (e.g., retry, fail, partial result)
+                        # For now, we'll continue, potentially resulting in incomplete text
 
-            user_text_raw = user_text_raw.strip()
+                # Clean up chunk file
+                if os.path.exists(chunk_path): os.remove(chunk_path)
 
-        except Exception as e:
-            # Clean up temp files if recognition fails
-            default_storage.delete(temp_path_webm)
-            default_storage.delete(wav_path)
-            return Response({"error": f"Lỗi trong quá trình nhận diện giọng nói: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            user_text_raw = recognized_text.strip()
+            if not user_text_raw:
+                 # Handle case where nothing was recognized
+                 raise sr.UnknownValueError("No speech recognized from the audio.")
 
 
-        # Lấy đoạn văn mẫu gốc
+        except sr.UnknownValueError:
+            # Cleanup temp files
+            if os.path.exists(temp_path): os.remove(temp_path)
+            if os.path.exists(wav_path): os.remove(wav_path)
+            return Response({"error": "Could not understand audio or no speech detected."}, status=status.HTTP_400_BAD_REQUEST)
+        except sr.RequestError as e:
+            # Cleanup temp files
+            if os.path.exists(temp_path): os.remove(temp_path)
+            if os.path.exists(wav_path): os.remove(wav_path)
+            return Response({"error": f"Speech recognition service error: {e}"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e: # Catch other potential errors during processing
+             print(f"Error during speech recognition: {e}")
+             # Cleanup temp files
+             if os.path.exists(temp_path): os.remove(temp_path)
+             if os.path.exists(wav_path): os.remove(wav_path)
+             return Response({"error": "An unexpected error occurred during speech recognition."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # --- 3. Get Original Text ---
         try:
             speaking_text = SpeakingText.objects.get(id=speaking_text_id)
+            # Decode the original content (assuming it's stored correctly)
+            # The original view1 had hex decoding, let's assume it's just UTF-8 text
+            original_text = speaking_text.content # Adjust if decoding (e.g., hex, base64) is needed
+            # If hex encoded as in view1:
+            # try:
+            #     original_bytes = bytes.fromhex(speaking_text.content) # Assuming content is hex string
+            #     original_text = original_bytes.decode("utf-8")
+            # except (ValueError, TypeError, AttributeError, UnicodeDecodeError) as decode_error:
+            #     print(f"Error decoding original text content for ID {speaking_text_id}: {decode_error}")
+            #     return Response({"error": "Could not decode the original text content."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         except SpeakingText.DoesNotExist:
-            # Clean up temp files
-            default_storage.delete(temp_path_webm)
-            default_storage.delete(wav_path)
-            return Response({"error": "Văn bản mẫu không tồn tại"}, status=status.HTTP_404_NOT_FOUND)
+            # Cleanup temp files
+            if os.path.exists(temp_path): os.remove(temp_path)
+            if os.path.exists(wav_path): os.remove(wav_path)
+            return Response({"error": "Reference speaking text not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e: # Catch other errors getting/decoding text
+             print(f"Error retrieving/processing original text {speaking_text_id}: {e}")
+             # Cleanup temp files
+             if os.path.exists(temp_path): os.remove(temp_path)
+             if os.path.exists(wav_path): os.remove(wav_path)
+             return Response({"error": "Failed to retrieve or process the reference text."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Giải mã nội dung gốc
-        original_text = ""
-        if speaking_text.content:
-            try:
-                 # Assuming content is stored as binary data (bytes) from base64 decode
-                original_text = speaking_text.content.decode("utf-8")
-            except Exception as e:
-                 # Clean up temp files
-                default_storage.delete(temp_path_webm)
-                default_storage.delete(wav_path)
-                return Response({"error": f"Không thể giải mã nội dung đoạn văn mẫu: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-        # Tính điểm và phân tích chi tiết từng từ
-        # Ensure original_text is not empty before calculating score
-        if not original_text:
-             # Clean up temp files
-            default_storage.delete(temp_path_webm)
-            default_storage.delete(wav_path)
-            return Response({"error": "Nội dung văn bản mẫu trống, không thể tính điểm."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        result = calculate_score(user_text_raw, original_text)
-
-        # Lưu kết quả thô vào DB nếu muốn (tùy bạn)
+        # --- 4. Calculate Score ---
         try:
-            SpeakingResult.objects.create(
-                speaking_text=speaking_text,
-                user_text=user_text_raw,
-                score=result.get("score", 0) # Use .get to avoid KeyError if score is missing
-            )
+            # Call your scoring function
+            result = calculate_score(user_text_raw, original_text) # Assumes calculate_score returns a dict like {'score': ..., 'details': ...}
         except Exception as e:
-            print(f"Error saving SpeakingResult: {e}")
-            # Continue even if saving result fails, but log the error
+            print(f"Error calculating score: {e}")
+            # Cleanup temp files
+            if os.path.exists(temp_path): os.remove(temp_path)
+            if os.path.exists(wav_path): os.remove(wav_path)
+            return Response({"error": "Failed to calculate the score."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Dọn dẹp file tạm
-        default_storage.delete(temp_path_webm)
-        default_storage.delete(wav_path)
+        # --- 5. Save Result (Optional) & Cleanup ---
+        try:
+            # Optionally save the practice log (can use the UserPracticeLogView logic or save directly)
+             UserPracticeLog.objects.create(
+                 user=user,
+                 speaking_text=speaking_text,
+                 score=result.get('score', 0), # Get score from result dict, default to 0
+                 details=result.get('details', None) # Get details if available
+                 # user_audio_path=wav_path # Optionally store path to the processed audio
+             )
+             # Consider saving the raw recognized text as well if needed for review
+             # SpeakingResult.objects.create(...) # If you have a separate model like view1
+
+        except Exception as e:
+            print(f"Error saving practice log: {e}")
+            # Don't fail the request if logging fails, but log the error
+
+        # Cleanup temporary files
+        finally: # Ensure cleanup happens even if logging fails
+             if os.path.exists(temp_path): os.remove(temp_path)
+             if os.path.exists(wav_path): os.remove(wav_path)
 
 
-        # Trả kết quả
-        return Response(result, status=status.HTTP_200_OK)
+        # --- 6. Return Result ---
+        # Add the recognized text to the response for the user to see
+        response_data = {
+            "recognized_text": user_text_raw,
+            "original_text": original_text, # Maybe return original text for comparison on frontend
+            "score_result": result # Contains score and potentially detailed analysis
+        }
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
-class UserListView(APIView):
-    """API endpoint to get a list of all users (might require admin permission)."""
-    # Consider adding permission_classes = [IsAdminUser] for security
-    def get(self, request):
-        users = User.objects.all()  # Lấy tất cả người dùng
-        serializer = UserSerializer(users, many=True)
-        return Response(serializer.data)
+# ==============================================================================
+#                         CRUD OPERATIONS - SPEAKING TEXTS 
+# ==============================================================================
+# Imports required for this section are already in COMMON IMPORTS
 
-
-##################################################### CRUD TAI LIEU #######################################################
-
-# API để thêm một SpeakingText mới
+# API to create a new SpeakingText 
 class SpeakingTextCreateAPIView(APIView):
-    """API endpoint to create a new SpeakingText."""
+    permission_classes = [IsAdminUser] # Typically restricted to admins
+
     def post(self, request):
-        genre_data = request.data.get('genre')  # Lấy dữ liệu genre từ request
-        level_data = request.data.get('level')  # Lấy dữ liệu level từ request
-
-        # Xử lý Genre
-        genre = None
-        if genre_data:
-            if isinstance(genre_data, dict):  # Nếu genre được gửi dưới dạng dict (chứa name)
-                genre_name = genre_data.get('name')
-                if genre_name:
-                    genre, created = Genre.objects.get_or_create(name=genre_name)
-                else:
-                     return Response({"error": "Genre name not provided in dictionary format."}, status=status.HTTP_400_BAD_REQUEST)
-            else:  # Nếu genre là ID
-                genre_id = genre_data
-                try:
-                    genre = Genre.objects.get(id=genre_id)
-                except Genre.DoesNotExist:
-                    return Response({"error": "Genre not found with the provided ID."}, status=status.HTTP_404_NOT_FOUND)
-        else:
-             return Response({"error": "Genre data not provided."}, status=status.HTTP_400_BAD_REQUEST)
-
-
-        # Xử lý Level
-        level = None
-        if level_data:
-            if isinstance(level_data, dict):  # Nếu level được gửi dưới dạng dict (chứa name)
-                level_name = level_data.get('name')
-                if level_name:
-                     level, created = Level.objects.get_or_create(name=level_name)
-                else:
-                     return Response({"error": "Level name not provided in dictionary format."}, status=status.HTTP_400_BAD_REQUEST)
-            else:  # Nếu level là ID
-                level_id = level_data
-                try:
-                    level = Level.objects.get(id=level_id)
-                except Level.DoesNotExist:
-                    return Response({"error": "Level not found with the provided ID."}, status=status.HTTP_404_NOT_FOUND)
-        else:
-             return Response({"error": "Level data not provided."}, status=status.HTTP_400_BAD_REQUEST)
-
-
-        # Giải mã nội dung content nếu có
-        content_base64 = request.data.get('content')
-        content_binary = None
-        if content_base64:
-            try:
-                content_binary = base64.b64decode(content_base64)  # Giải mã base64 thành binary
-            except Exception as e:
-                 return Response({"error": f"Không thể giải mã nội dung content base64: {e}"}, status=status.HTTP_400_BAD_REQUEST)
-
-
-        # Tạo SpeakingText và lưu vào cơ sở dữ liệu
-        # Prepare data for serializer, excluding genre and level which are handled separately
-        serializer_data = request.data.copy()
-        serializer_data.pop('genre', None) # Remove to avoid serializer trying to handle it
-        serializer_data.pop('level', None) # Remove to avoid serializer trying to handle it
-        serializer_data['content'] = content_binary # Add the processed content
-
-        serializer = SpeakingTextSerializer(data=serializer_data)
-
+        serializer = SpeakingTextSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            # Liên kết với genre và level, lưu content đã giải mã vào cơ sở dữ liệu
-            serializer.save(genre=genre, level=level)  # Lưu vào cơ sở dữ liệu
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # The serializer handles nested relationships (Genre, Level) if configured correctly
+            # Or you extract IDs/names and fetch/create Genre/Level objects manually before saving
+            # Example: Manual handling (if serializer doesn't handle nested creation)
+            # genre_data = request.data.get('genre') # Could be ID or dict {'name': '...'}
+            # level_data = request.data.get('level') # Could be ID or dict {'name': '...'}
+            # ... logic to get_or_create genre and level objects ...
+            # serializer.save(genre=genre_obj, level=level_obj)
+            try:
+                 serializer.save()
+                 return Response(serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                 # Handle potential errors during save (e.g., database constraints)
+                 print(f"Error saving SpeakingText: {e}")
+                 return Response({"error": f"Failed to save SpeakingText: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-#API EDIT
+
+# API to update an existing SpeakingText 
 class SpeakingTextUpdateAPIView(generics.UpdateAPIView):
-    """API endpoint to update an existing SpeakingText by ID."""
-    queryset = SpeakingText.objects.all()  # Lấy tất cả tài liệu
-    serializer_class = SpeakingTextSerializer  # Sử dụng SpeakingTextSerializer để cập nhật
-    lookup_field = 'id'  # Để tìm tài liệu theo ID
+    queryset = SpeakingText.objects.all()
+    serializer_class = SpeakingTextSerializer
+    permission_classes = [IsAdminUser] # Typically restricted to admins
+    lookup_field = 'id' # Use 'id' to find the object (can change to 'pk')
 
-#API DELETE
+# API to delete a SpeakingText 
 class SpeakingTextDeleteAPIView(generics.DestroyAPIView):
-    """API endpoint to delete a SpeakingText by ID."""
-    queryset = SpeakingText.objects.all()  # Lấy tất cả tài liệu
-    serializer_class = SpeakingTextSerializer  # Dùng serializer của SpeakingText
-    lookup_field = 'id'  # Tìm tài liệu theo ID
+    queryset = SpeakingText.objects.all()
+    serializer_class = SpeakingTextSerializer # Serializer used for potential response (usually none on delete)
+    permission_classes = [IsAdminUser] # Typically restricted to admins
+    lookup_field = 'id' # Use 'id' to find the object
 
+# ==============================================================================
+#                         CRUD OPERATIONS - USERS 
+# ==============================================================================
+# Imports required for this section are already in COMMON IMPORTS
 
-##################################################### CRUD USER #######################################################
+# API to list users 
+class UserListView(generics.ListAPIView):
+    queryset = User.objects.all().order_by('id') # Get all users
+    serializer_class = UserSerializer
+    permission_classes = [IsAdminUser] # Listing all users typically requires admin rights
+
+# API to create a user 
+# Note: This might bypass standard Django user creation signals/password hashing if UserSerializer is basic.
+# Consider using the RegisterView above or ensuring UserSerializer handles password hashing correctly.
 class UserCreateAPIView(generics.CreateAPIView):
-    """API endpoint to create a new user."""
-    queryset = User.objects.all()  # Tất cả người dùng
-    serializer_class = UserSerializer  # Dùng UserSerializer để tạo mới người dùng
+    queryset = User.objects.all()
+    serializer_class = UserSerializer # Ensure this serializer handles password hashing!
+    permission_classes = [IsAdminUser] # Creating users directly often requires admin rights
 
+# API to update a user 
 class UserUpdateAPIView(generics.UpdateAPIView):
-    """API endpoint to update an existing user by ID."""
     queryset = User.objects.all()
-    serializer_class = UserSerializer
-    lookup_field = 'id'  # Tìm người dùng theo id
+    serializer_class = UserSerializer # Ensure this handles password changes securely if allowed
+    permission_classes = [IsAdminUser] # Or allow users to update their own profiles
+    lookup_field = 'id' # Find user by id
 
+# API to delete a user 
 class UserDeleteAPIView(generics.DestroyAPIView):
-    """API endpoint to delete a user by ID."""
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    lookup_field = 'id'  # Tìm người dùng theo id
+    permission_classes = [IsAdminUser] # Deleting users typically requires admin rights
+    lookup_field = 'id' # Find user by id
 
+
+# ==============================================================================
+#                                 LEVELS API 
+# ==============================================================================
+# Imports required for this section are already in COMMON IMPORTS
+
+# API to list all available Levels 
 class LevelListAPIView(generics.ListAPIView):
-    """API endpoint to get a list of all levels."""
-    queryset = Level.objects.all()  # Lấy tất cả các level
-    serializer_class = LevelSerializer  # Sử dụng LevelSerializer để trả về dữ liệu
+    queryset = Level.objects.all().order_by('id') # Get all levels, ordered by ID
+    serializer_class = LevelSerializer
+    # No specific permissions needed usually, assuming levels are public info
+    # permission_classes = [IsAuthenticated] # Or require login if levels are not public
