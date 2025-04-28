@@ -19,6 +19,8 @@ urlpatterns = [
     path('practice-logs/', UserPracticeLogView.as_view(), name='user-practice-log-list-create'),
     # --- Dashboard Stats URL ---
     path('dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
+    # thu âm và chấm điểm phát âm
+    path('pronunciation/assess/', views.PronunciationAssessmentView.as_view(), name='pronunciation-assess'),
     # Thể loại
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),
