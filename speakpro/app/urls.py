@@ -37,6 +37,10 @@ urlpatterns = [
     path('upload-user-audio/', views.upload_user_audio, name='upload_user_audio'),
 
     path('api/submit-speaking/', views.SubmitSpeakingAPIView.as_view(), name='submit-speaking'),
+    
+    #ai
+    path('api/dialogue/', views.DialogueAPIView.as_view(), name='ai-dialogue'),
+
 
 ]    + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     

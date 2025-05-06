@@ -311,3 +311,67 @@ class UserDeleteAPIView(generics.DestroyAPIView):
 class LevelListAPIView(generics.ListAPIView):
     queryset = Level.objects.all()  # Lấy tất cả các level
     serializer_class = LevelSerializer  # Sử dụng LevelSerializer để trả về dữ liệu
+    
+
+##################################################### AI #######################################################
+from .utils.mistral_api import ask_mistral
+from gtts import gTTS
+import time
+from django.conf import settings
+
+class DialogueAPIView(APIView):
+    def post(self, request):
+        audio_file = request.FILES.get("audio_file")
+        print("[✔] Nhận file:", audio_file.name, audio_file.size)
+
+        if not audio_file:
+            return Response({"error": "Missing audio file."}, status=400)
+
+        # [1] Lưu file tạm
+        temp_path = default_storage.save('temp_input.webm', audio_file)
+        full_path = os.path.join(default_storage.location, temp_path)
+
+        # [2] Chuyển sang WAV
+        wav_path = full_path.replace('.webm', '.wav')
+        sound = AudioSegment.from_file(full_path, format="webm")
+        sound.export(wav_path, format="wav")
+
+        # [3] Nhận dạng giọng nói
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            try:
+                user_text = recognizer.recognize_google(audio_data, language="en-US")
+                print("[✔] Văn bản nhận được:", user_text)
+            except sr.UnknownValueError:
+                return Response({"error": "Không thể nhận diện giọng nói"}, status=400)
+            except sr.RequestError:
+                return Response({"error": "Lỗi kết nối Google Speech API"}, status=500)
+
+
+        # [4] Gửi văn bản lên Mistral AI
+        ai_text = ask_mistral(user_text)
+
+        # [5] TTS: chuyển text thành audio
+        tts = gTTS(ai_text)
+
+        # Tạo thư mục con ai_responses trong MEDIA_ROOT
+        output_dir = os.path.join(settings.MEDIA_ROOT, "ai_responses")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Đặt tên file theo timestamp để tránh bị ghi đè
+        filename = f"response_{int(time.time())}.mp3"
+        output_path = os.path.join(output_dir, filename)
+
+        # Lưu file đúng chỗ
+        tts.save(output_path)
+
+        # Tạo URL trả về
+        audio_url = request.build_absolute_uri(f"/media/ai_responses/{filename}")
+
+        # [6] Trả kết quả
+        return Response({
+            "user_text": user_text,
+            "ai_text": ai_text,
+            "ai_audio_url": request.build_absolute_uri(f"/media/ai_responses/{filename}")
+        }, status=200)
