@@ -19,6 +19,46 @@ urlpatterns = [
     path('practice-logs/', UserPracticeLogView.as_view(), name='user-practice-log-list-create'),
     # --- Dashboard Stats URL ---
     path('dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
+    # Challenge Categories
+    path('api/challenge-categories/', 
+         views.ChallengeCategoryViewSet.as_view({'get': 'list'}), 
+         name='challenge-category-list'),
+    path('api/challenge-categories/<int:pk>/', 
+         views.ChallengeCategoryViewSet.as_view({'get': 'retrieve'}), 
+         name='challenge-category-detail'),
+
+    # Challenges
+    path('api/challenges/', 
+         views.ChallengeViewSet.as_view({'get': 'list'}), 
+         name='challenge-list'),
+    path('api/challenges/<int:pk>/', 
+         views.ChallengeViewSet.as_view({'get': 'retrieve'}), 
+         name='challenge-detail'),
+    
+    # Custom actions cho ChallengeViewSet
+    path('api/challenges/<int:pk>/start/', 
+         views.ChallengeViewSet.as_view({'post': 'start_challenge'}), 
+         name='challenge-start'),
+    path('api/challenges/<int:pk>/exercises/',
+         views.ChallengeViewSet.as_view({'get': 'list_exercises_with_status'}),
+         name='challenge-list-exercises-with-status'),
+    path('api/challenges/<int:pk>/leaderboard/', 
+         views.ChallengeViewSet.as_view({'get': 'leaderboard'}), 
+         name='challenge-leaderboard'),
+
+    #Submit Challenge Exercise Attempt
+    path('api/challenges/<int:challenge_pk>/exercises/<int:exercise_pk>/submit-attempt/', 
+         views.ChallengeExerciseSubmitAttemptView.as_view(), 
+         name='challenge-exercise-submit-attempt'),
+    # Leadersboard     
+    path('api/global-leaderboard/', 
+         views.GlobalLeaderboardView.as_view(), 
+         name='global-leaderboard'),
+
+    # User Challenge Data & Achievements 
+    path('api/user-challenge-data/', 
+         views.UserChallengeDataView.as_view(), 
+         name='user-challenge-data'),
     # Thể loại
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),
@@ -57,7 +97,7 @@ urlpatterns = [
     
     #ai
     path('api/dialogue/', views.DialogueAPIView.as_view(), name='ai-dialogue'),
-
+    
 
 ]    + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     
