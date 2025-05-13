@@ -51,7 +51,8 @@ def home(request):
 #                         AUTHENTICATION & USER MANAGEMENT VIEWS 
 # ==============================================================================
 # Imports required for this section are already in COMMON IMPORTS
-
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 class RegisterView(APIView):
     def post(self, request):
         data = request.data
@@ -198,6 +199,16 @@ class ResetPasswordView(APIView):
 
         return Response({'message': 'Password has been reset successfully!'}, status=status.HTTP_200_OK)
 
+def is_admin(user):
+    return user.is_authenticated and user.is_superuser  
+
+@permission_classes([IsAuthenticated])
+@api_view(['GET'])
+def admin_dashboard(request):
+    if is_admin(request.user):
+        return Response({'message': 'Welcome Admin!'}, status=status.HTTP_200_OK)
+    return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
 # ==============================================================================
 #                         USER PROGRESS & HISTORY VIEWS 
 # ==============================================================================
@@ -238,44 +249,61 @@ class UserPracticeLogView(ListCreateAPIView):
 #                            DASHBOARD & STATS VIEWS 
 # ==============================================================================
 # Imports required for this section are already in COMMON IMPORTS
-User = get_user_model() # Ensure User is the correct model
+
+User = get_user_model()
 
 class DashboardStatsView(APIView):
-    """
-    API endpoint to retrieve statistics for the admin dashboard, using data from
-    `auth_user` and `app_userpracticelog` (adjust app name if needed).
-    Requires admin privileges.
-    """
     permission_classes = [IsAdminUser]
 
     def get(self, request, format=None):
-        # 1. Total Users: Count all users in `auth_user` table
+        now = timezone.now()
+        last_7_days = now - timedelta(days=7)
+
+        # Tổng người dùng
         total_users = User.objects.count()
 
-        # 2. Active Users: Count users in `auth_user` where `is_active` is True
-        active_users = User.objects.filter(is_active=True).count()
+        # Nội dung đang hoạt động (ví dụ: status=True)
+        active_content = SpeakingText.objects.filter(is_active=True).count()
 
-        # 3. Recent Activity Users:
-        # Count distinct user_ids from `app_userpracticelog`
-        # with `practice_date` within the last 7 days.
-        recent_days = 7
-        cutoff_date = timezone.now() - timedelta(days=recent_days)
+        # Tổng số bản ghi luyện tập
+        total_reports = UserPracticeLog.objects.count()
 
-        # Assumes the model name is UserPracticeLog and the app label is implicitly found
-        # If your app name is different, specify like: `yourapp.UserPracticeLog`
-        recent_activity_users = UserPracticeLog.objects.filter(
-            practice_date__gte=cutoff_date
-        ).values('user').distinct().count() # Use the foreign key 'user' which links to auth_user
+        # Tính phần trăm người dùng hoạt động 7 ngày qua
+        active_user_ids = UserPracticeLog.objects.filter(
+            practice_date__gte=last_7_days
+        ).values_list('user_id', flat=True).distinct()
+        engagement_percent = round((active_user_ids.count() / total_users) * 100) if total_users > 0 else 0
 
-        # Data to return to the frontend
-        data = {
+        # Hoạt động từng ngày
+        daily_activity = UserPracticeLog.objects.filter(
+            practice_date__gte=last_7_days
+        ).extra({'day': "DATE(practice_date)"}).values('day').annotate(count=Count('id')).order_by('day')
+
+        # Chuyển đổi sang format frontend cần
+        daily_user_activity = [
+            {'day': record['day'].strftime('%a'), 'value': record['count']}
+            for record in daily_activity
+        ]
+
+        # Nội dung theo thể loại
+        category_usage = (
+            SpeakingText.objects.values('genre__name')  # genre là FK
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        content_usage_by_category = [
+            {'category': item['genre__name'], 'value': item['count']}
+            for item in category_usage
+        ]
+
+        return Response({
             'total_users': total_users,
-            'active_users': active_users,
-            'recent_activity_users': recent_activity_users,
-            'recent_activity_days': recent_days
-        }
-
-        return Response(data, status=status.HTTP_200_OK)
+            'active_content': active_content,
+            'total_reports': total_reports,
+            'user_engagement_percent': engagement_percent,
+            'daily_user_activity': daily_user_activity,
+            'content_usage_by_category': content_usage_by_category
+        })
 
 
 # ==============================================================================

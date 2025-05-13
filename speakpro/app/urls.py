@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import home, RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView, SpeakingTextSearchView, UserPracticeLogView, DashboardStatsView
+from .views import home, RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView, SpeakingTextSearchView, UserPracticeLogView, DashboardStatsView, admin_dashboard
 from .views import  GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView,UserListView
 from django.conf import settings
 from django.conf.urls.static import static
@@ -13,6 +13,7 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='logout'),  # Route cho đăng xuất
     path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),  # Route cho quên mật khẩu
     path('reset-password/', ResetPasswordView.as_view(), name='reset_password'),  # Route cho đặt lại mật khẩu
+    path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
     # tìm kiếm SpeakingText Topics
     path('speaking-texts/search/', SpeakingTextSearchView.as_view(), name='speaking-text-search'),
     # User Progress & History URL
