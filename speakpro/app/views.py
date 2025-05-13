@@ -233,6 +233,17 @@ class UserListView(APIView):
         users = User.objects.all()  # Lấy tất cả người dùng
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data)
+from rest_framework.generics import RetrieveAPIView
+from django.contrib.auth import get_user_model
+from .serializers import UserSerializer
+
+User = get_user_model()
+
+class UserDetailAPIView(RetrieveAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    lookup_field = 'id'
+
 #record
 
 
