@@ -759,537 +759,137 @@ class LevelListAPIView(generics.ListAPIView):
 #                                 CHALENGES API 
 # ==============================================================================
 
-from rest_framework import viewsets, mixins 
-from rest_framework.decorators import action 
-from django.db.models import Window, F
-from django.db.models.functions import Rank
-from django.shortcuts import get_object_or_404 
-from .models import ( 
-    ChallengeCategory, Challenge, ChallengeExercise,
-    UserChallengeAttempt, UserChallengeExerciseAttempt, UserChallengeStreak,
-    Achievement, UserAchievement, UserPracticeLog, SpeakingText 
-)
-from .serializers import ( 
-    ChallengeCategorySerializer, ChallengeSerializer, ChallengeExerciseSerializer,
-    UserChallengeAttemptSerializer, UserChallengeExerciseAttemptSerializer,
-    UserChallengeStreakSerializer, AchievementSerializer, UserAchievementSerializer,
-    ChallengeLeaderboardEntrySerializer 
-)
-class ChallengeCategoryViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    API endpoint for listing and retrieving Challenge Categories.
-    """
-    queryset = ChallengeCategory.objects.all()
-    serializer_class = ChallengeCategorySerializer
-    permission_classes = [IsAuthenticated] 
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import generics
+from django.utils import timezone
+from .models import Challenge, ChallengeCategory, UserChallengeAttempt
+from .serializers import ChallengeSerializer, ChallengeCategorySerializer, UserChallengeAttemptSerializer
 
-
-class ChallengeViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    API endpoint for listing and retrieving Challenges.
-    Includes user-specific progress if authenticated.
-    """
-    queryset = Challenge.objects.filter(is_active=True).prefetch_related(
-        'exercises__speaking_text', 'level', 'category'
-    ) # Chỉ lấy challenge active
+class ChallengeListView(generics.ListAPIView):
+    queryset = Challenge.objects.filter(is_active=True).select_related('level', 'category')
     serializer_class = ChallengeSerializer
-    permission_classes = [IsAuthenticated] 
 
-    def get_serializer_context(self):
-        # Truyền request vào context để serializer có thể lấy user
-        return {'request': self.request, 'format': self.format_kwarg, 'view': self}
+class ChallengeDetailView(generics.RetrieveAPIView):
+    queryset = Challenge.objects.select_related('level', 'category')
+    serializer_class = ChallengeSerializer
 
-    @action(detail=True, methods=['post'], url_path='start')
-    def start_challenge(self, request, pk=None):
-        """
-        Allows an authenticated user to start a challenge.
-        Creates a UserChallengeAttempt if one doesn't exist.
-        """
-        challenge = self.get_object()
-        user = request.user
-
-        if not challenge.get_is_currently_active:
-            return Response({"error": "This challenge is not currently active."}, status=status.HTTP_400_BAD_REQUEST)
-
-        attempt, created = UserChallengeAttempt.objects.get_or_create(
-            user=user,
-            challenge=challenge,
-            defaults={'status': 'in_progress', 'started_at': timezone.now()}
-        )
-
-        if not created and attempt.status == 'not_started': # Nếu đã có nhưng chưa bắt đầu
-            attempt.status = 'in_progress'
-            attempt.started_at = timezone.now() # Cập nhật lại thời gian bắt đầu
-            attempt.save()
-        
-        # Tạo các UserChallengeExerciseAttempt nếu chưa có
-        exercises = challenge.exercises.all()
-        for exercise in exercises:
-            UserChallengeExerciseAttempt.objects.get_or_create(
-                user_challenge_attempt=attempt,
-                challenge_exercise=exercise
-            )
-
-        serializer = UserChallengeAttemptSerializer(attempt, context=self.get_serializer_context())
-        return Response(serializer.data, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
-
-    @action(detail=True, methods=['get'], url_path='exercises')
-    def list_exercises_with_status(self, request, pk=None):
-        """
-        List exercises for a specific challenge, including the current user's completion status for each.
-        """
-        challenge = self.get_object()
-        user = request.user
-        
-        try:
-            user_attempt = UserChallengeAttempt.objects.get(user=user, challenge=challenge)
-        except UserChallengeAttempt.DoesNotExist:
-            # Nếu user chưa bắt đầu challenge, có thể trả về danh sách exercise không có status
-            # Hoặc yêu cầu user start challenge trước
-             return Response({"error": "You have not started this challenge yet. Please start the challenge first."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Lấy tất cả các UserChallengeExerciseAttempt của user cho challenge này
-        exercise_attempts = UserChallengeExerciseAttempt.objects.filter(
-            user_challenge_attempt=user_attempt
-        ).select_related('challenge_exercise__speaking_text', 'user_practice_log')
-
-        # Serialize dữ liệu
-        # Cần một serializer có thể kết hợp ChallengeExercise và UserChallengeExerciseAttempt
-        
-        # Tạm thời trả về danh sách UserChallengeExerciseAttemptSerializer
-        # Frontend sẽ cần map với danh sách exercises từ ChallengeSerializer nếu cần
-        # Hoặc chúng ta tạo một response tùy chỉnh ở đây
-        
-        data = []
-        all_challenge_exercises = challenge.exercises.order_by('order').select_related('speaking_text__genre', 'speaking_text__level')
-
-        for ch_exercise in all_challenge_exercises:
-            exercise_data = ChallengeExerciseSerializer(ch_exercise).data
-            attempt_data = None
-            try:
-                ex_attempt = exercise_attempts.get(challenge_exercise=ch_exercise)
-                attempt_data = UserChallengeExerciseAttemptSerializer(ex_attempt).data
-            except UserChallengeExerciseAttempt.DoesNotExist:
-                # User chưa làm bài này, có thể tạo một entry rỗng cho is_completed=false
-                pass 
-            
-            exercise_data['user_attempt_details'] = attempt_data
-            data.append(exercise_data)
-            
-        return Response(data)
-
-
-    @action(detail=True, methods=['get'], url_path='leaderboard')
-    def leaderboard(self, request, pk=None):
-        """
-        Get leaderboard for a challenge.
-        Lists top users by points_earned and completion_time.
-        """
-        challenge = self.get_object()
-        # Lấy các attempt đã hoàn thành, sắp xếp theo điểm, sau đó theo thời gian hoàn thành
-        # Giới hạn ví dụ 10 người đầu
-        leaderboard_attempts = UserChallengeAttempt.objects.filter(
-            challenge=challenge, status='completed'
-        ).select_related('user').order_by('-points_earned', 'completed_at')[:20] # Top 20
-
-        # Thêm rank
-        # queryset_with_rank = UserChallengeAttempt.objects.filter(
-        #     challenge=challenge, status='completed'
-        # ).annotate(
-        #     rank=Window(
-        #         expression=Rank(),
-        #         order_by=[F('points_earned').desc(), F('completed_at').asc()]
-        #     )
-        # ).select_related('user')[:20]
-        # serializer = ChallengeLeaderboardEntrySerializer(queryset_with_rank, many=True)
-        
-        # Cách đơn giản hơn để thêm rank vào serializer (nếu không dùng Window function phức tạp)
-        ranked_data = []
-        for i, attempt in enumerate(leaderboard_attempts):
-            serialized_attempt = ChallengeLeaderboardEntrySerializer(attempt).data
-            serialized_attempt['rank'] = i + 1
-            ranked_data.append(serialized_attempt)
-            
-        return Response(ranked_data)
-
-
-class ChallengeExerciseSubmitAttemptView(APIView):
-    """
-    API endpoint for a user to submit their attempt for a specific ChallengeExercise.
-    This will involve speech-to-text, scoring, and updating challenge progress.
-    """
+class UserChallengeAttemptView(generics.CreateAPIView):
+    serializer_class = UserChallengeAttemptSerializer
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, challenge_pk, exercise_pk):
-        user = request.user
-        audio_file = request.FILES.get("audio_file")
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
-        if not audio_file:
-            return Response({"error": "Missing 'audio_file'."}, status=status.HTTP_400_BAD_REQUEST)
+class UserChallengeHistoryView(generics.ListAPIView):
+    serializer_class = UserChallengeAttemptSerializer
+    permission_classes = [IsAuthenticated]
 
-        challenge = get_object_or_404(Challenge, pk=challenge_pk)
-        challenge_exercise = get_object_or_404(ChallengeExercise, pk=exercise_pk, challenge=challenge)
-        speaking_text_obj = challenge_exercise.speaking_text
+    def get_queryset(self):
+        return UserChallengeAttempt.objects.filter(user=self.request.user).select_related('challenge', 'challenge__category', 'challenge__level')
 
-        # 0. Kiểm tra user đã start challenge chưa
-        try:
-            user_challenge_attempt = UserChallengeAttempt.objects.get(user=user, challenge=challenge)
-            if user_challenge_attempt.status == 'completed':
-                 return Response({"error": "You have already completed this challenge."}, status=status.HTTP_400_BAD_REQUEST)
-            if user_challenge_attempt.status == 'not_started': # Nên được xử lý bởi start_challenge endpoint
-                 user_challenge_attempt.status = 'in_progress'
-                 user_challenge_attempt.save()
-
-        except UserChallengeAttempt.DoesNotExist:
-            return Response({"error": "You have not started this challenge yet. Please start the challenge first."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Lấy hoặc tạo UserChallengeExerciseAttempt
-        user_exercise_attempt, created = UserChallengeExerciseAttempt.objects.get_or_create(
-            user_challenge_attempt=user_challenge_attempt,
-            challenge_exercise=challenge_exercise
-        )
-        if user_exercise_attempt.is_completed:
-             return Response({"message": "You have already completed this exercise.", "data": UserChallengeExerciseAttemptSerializer(user_exercise_attempt).data}, status=status.HTTP_200_OK)
-
-
-        # --- Các bước xử lý audio tương tự SubmitSpeakingAPIView ---
-        # 1. Save and Convert Audio (nếu cần)
-        temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_challenge_submissions')
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_filename = f"{user.id}_ch{challenge_pk}_ex{exercise_pk}_{timezone.now().strftime('%Y%m%d%H%M%S%f')}.webm" # Thêm microsecond để unique hơn
-        temp_path = os.path.join(temp_dir, temp_filename)
-
-        try:
-            with default_storage.open(temp_path, 'wb+') as destination:
-                for chunk in audio_file.chunks():
-                    destination.write(chunk)
-        except Exception as e:
-            # Log lỗi
-            return Response({"error": f"Failed to save uploaded audio file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        wav_path = temp_path.replace('.webm', '.wav')
-        try:
-            sound = AudioSegment.from_file(temp_path, format="webm")
-            sound.export(wav_path, format="wav")
-        except Exception as e:
-            if os.path.exists(temp_path): os.remove(temp_path)
-            return Response({"error": f"Failed to convert audio to WAV: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # 2. Speech Recognition
-        recognizer = sr.Recognizer()
-        recognized_text_raw = ""
-        # (Copy logic nhận dạng từ SubmitSpeakingAPIView, bao gồm chunking nếu cần)
-        try:
-            with sr.AudioFile(wav_path) as source:
-                audio_data = recognizer.record(source)
-                recognized_text_raw = recognizer.recognize_google(audio_data, language=speaking_text_obj.language or "en-US") # Sử dụng ngôn ngữ của speaking_text
-        except sr.UnknownValueError:
-            # Xóa file tạm
-            if os.path.exists(temp_path): os.remove(temp_path)
-            if os.path.exists(wav_path): os.remove(wav_path)
-            return Response({"error": "Could not understand audio or no speech detected."}, status=status.HTTP_400_BAD_REQUEST)
-        except sr.RequestError as e:
-            if os.path.exists(temp_path): os.remove(temp_path)
-            if os.path.exists(wav_path): os.remove(wav_path)
-            return Response({"error": f"Speech recognition service error: {e}"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except Exception as e:
-             if os.path.exists(temp_path): os.remove(temp_path)
-             if os.path.exists(wav_path): os.remove(wav_path)
-             return Response({"error": f"An unexpected error during speech recognition: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-        # 3. Get Original Text
-        original_text = speaking_text_obj.content # Đã là TextField
-
-        # 4. Calculate Score
-        try:
-            # Giả sử bạn có hàm này: from .utils.score import calculate_score
-            # score_result = calculate_score(recognized_text_raw, original_text)
-            # Ví dụ mock:
-            import difflib
-            similarity = difflib.SequenceMatcher(None, recognized_text_raw.lower(), original_text.lower()).ratio()
-            score_value = round(similarity * 100)
-            score_result = {"score": score_value, "details": {"recognized": recognized_text_raw, "similarity": similarity, "word_diff": "..."}}
-
-        except Exception as e:
-            if os.path.exists(temp_path): os.remove(temp_path)
-            if os.path.exists(wav_path): os.remove(wav_path)
-            return Response({"error": f"Failed to calculate score: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # 5. Tạo UserPracticeLog
-        try:
-            practice_log = UserPracticeLog.objects.create(
-                user=user,
-                speaking_text=speaking_text_obj,
-                score=score_result.get('score', 0),
-                details=score_result.get('details', {})
-                # user_audio_path=wav_path # Có thể lưu đường dẫn file audio đã xử lý
-            )
-        except Exception as e:
-            # Log lỗi, nhưng vẫn có thể tiếp tục nếu việc tạo log không quá quan trọng bằng việc cập nhật challenge
-            print(f"Error creating UserPracticeLog for challenge exercise: {str(e)}")
-            practice_log = None # Đảm bảo practice_log là None nếu tạo lỗi
-
-        # 6. Cập nhật UserChallengeExerciseAttempt
-        user_exercise_attempt.user_practice_log = practice_log
-        user_exercise_attempt.is_completed = True
-        user_exercise_attempt.score_at_completion = score_result.get('score', 0)
-        user_exercise_attempt.completed_at = timezone.now()
-        user_exercise_attempt.save()
-
-        # 7. Cập nhật UserChallengeAttempt (status, points)
-        progress_info = user_challenge_attempt.update_progress_and_points()
-
-        # 8. Cập nhật UserChallengeStreak (nếu challenge hoàn thành)
-        if user_challenge_attempt.status == 'completed':
-            user_streak, _ = UserChallengeStreak.objects.get_or_create(user=user)
-            user_streak.update_streak(user_challenge_attempt.completed_at.date())
-            # TODO: check_and_award_achievements_for_challenge_completion(user, challenge)
-
-        # 9. Dọn dẹp file tạm
-
-            if os.path.exists(temp_path): os.remove(temp_path)
-            if os.path.exists(wav_path): os.remove(wav_path)
-        
-        # 10. Trả kết quả
-        return Response({
-            "message": "Exercise attempt submitted successfully.",
-            "recognized_text": recognized_text_raw,
-            "score_result": score_result,
-            "exercise_attempt_status": UserChallengeExerciseAttemptSerializer(user_exercise_attempt).data,
-            "challenge_attempt_status": UserChallengeAttemptSerializer(user_challenge_attempt, context={'request': request}).data,
-            "challenge_progress": progress_info
-        }, status=status.HTTP_200_OK)
-
-
-class UserChallengeDataView(APIView):
-    """
-    API endpoint to get consolidated challenge-related data for the current user.
-    - "Your Challenge Stats": Aggregated stats.
-    - "Weekly Achievement": Current best/relevant achievement or streak.
-    - List of active challenges with user's progress.
-    """
+class UserChallengeStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-
-        # 1. Your Challenge Stats
-        completed_challenges_count = UserChallengeAttempt.objects.filter(user=user, status='completed').count()
-        active_challenges_attempts = UserChallengeAttempt.objects.filter(user=user, status='in_progress')
-        active_challenges_count = active_challenges_attempts.count()
-        total_points_earned = sum(attempt.points_earned for attempt in UserChallengeAttempt.objects.filter(user=user))
-        
-        user_streak, _ = UserChallengeStreak.objects.get_or_create(user=user)
-        current_streak = user_streak.current_streak_days
-
-        challenge_stats = {
-            "challenges_completed": completed_challenges_count,
-            "active_challenges": active_challenges_count,
-            "points_earned": total_points_earned,
-            "current_streak_days": current_streak,
-        }
-
-        # 2. Weekly Achievement / User Achievements
-        # Lấy achievement nổi bật nhất hoặc gần đây nhất, ví dụ: "Consistency Champion" nếu streak >= 5
-        # Đây là ví dụ, bạn cần logic cụ thể hơn để xác định "Weekly Achievement"
-        weekly_achievement_data = None
-        consistency_achievement = Achievement.objects.filter(name__icontains="Consistency Champion").first() # Giả sử tên achievement
-        if consistency_achievement:
-            try:
-                user_cons_achievement = UserAchievement.objects.get(user=user, achievement=consistency_achievement)
-                weekly_achievement_data = UserAchievementSerializer(user_cons_achievement).data
-            except UserAchievement.DoesNotExist:
-                 # Kiểm tra xem user có đủ điều kiện cho achievement này không (ví dụ streak)
-                if current_streak >= consistency_achievement.criteria.get("days", 5): # Giả sử criteria có dạng {"days": 5}
-                    # Trao achievement nếu chưa có
-                    ua, created = UserAchievement.objects.get_or_create(
-                        user=user, achievement=consistency_achievement,
-                        defaults={'achieved_at': timezone.now()}
-                    )
-                    if created and consistency_achievement.points_reward > 0:
-                        # TODO: Cộng điểm cho user (nếu achievement có điểm thưởng)
-                        pass
-                    weekly_achievement_data = UserAchievementSerializer(ua).data
-                else: # Nếu không có achievement và không đủ điều kiện
-                    weekly_achievement_data = {
-                        "name": consistency_achievement.name,
-                        "description": consistency_achievement.description,
-                        "icon_url": consistency_achievement.icon_url,
-                        "message": f"Complete challenges for {consistency_achievement.criteria.get('days', 5)} consecutive days to earn this!",
-                        "current_progress_days": current_streak,
-                        "target_days": consistency_achievement.criteria.get('days', 5)
-                    }
-
-
-        # Lấy tất cả achievements của user
-        all_user_achievements = UserAchievement.objects.filter(user=user).select_related('achievement')
-        
+        attempts = UserChallengeAttempt.objects.filter(user=user)
+        completed = attempts.count()
+        active = Challenge.objects.filter(is_active=True).count()
+        points = sum([a.challenge.points for a in attempts])
+        # Simple streak: count consecutive days
+        today = timezone.now().date()
+        streak = 0
+        for i in range(1, 100):
+            day = today - timezone.timedelta(days=i)
+            if attempts.filter(attempt_time__date=day).exists():
+                streak += 1
+            else:
+                break
         return Response({
-            "challenge_stats": challenge_stats,
-            "weekly_achievement_highlight": weekly_achievement_data, # Thông tin cho phần "Weekly Achievement" trên UI
-            "all_user_achievements": UserAchievementSerializer(all_user_achievements, many=True).data,
-        }, status=status.HTTP_200_OK)
+            'completed': completed,
+            'active': active,
+            'points': points,
+            'current_streak': f"{streak} days"
+        })
+
 
 # ==============================================================================
 #                                 LEADERBOARD API 
 # ==============================================================================
-from django.db.models import Sum, Q, Count, Case, When, Value, IntegerField
-from django.db.models.functions import Coalesce
-from datetime import timedelta, date
-from .serializers import ( 
-    GlobalLeaderboardEntrySerializer, UserSerializer, UserChallengeStreakSerializer, GlobalLeaderboardUserSerializer,
-)
+from django.db.models import Sum, Count
+from .serializers import LeaderboardEntrySerializer, YourRankingSerializer
+class LeaderboardView(APIView):
+    def get(self, request):
+        # Aggregate user scores
+        rankings = (
+            UserChallengeAttempt.objects
+            .values('user__id', 'user__username')
+            .annotate(total_points=Sum('challenge__points'))
+            .order_by('-total_points')[:100]
+        )
 
-class GlobalLeaderboardView(APIView):
-    permission_classes = [IsAuthenticated] # Hoặc AllowAny nếu leaderboard công khai
+        # Add current streaks
+        data = []
+        for entry in rankings:
+            user_id = entry['user__id']
+            today = timezone.now().date()
+            streak = 0
+            for i in range(1, 100):
+                day = today - timezone.timedelta(days=i)
+                if UserChallengeAttempt.objects.filter(user_id=user_id, attempt_time__date=day).exists():
+                    streak += 1
+                else:
+                    break
+            data.append({
+                'user_id': user_id,
+                'username': entry['user__username'],
+                'total_points': entry['total_points'],
+                'current_streak': streak
+            })
 
-    def _get_date_range(self, period_filter):
-        today = timezone.now().date()
-        start_date = None
-        end_date = today # Mặc định kết thúc là hôm nay
+        return Response(LeaderboardEntrySerializer(data, many=True).data)
 
-        if period_filter == 'weekly':
-            # Tính từ thứ Hai của tuần này đến Chủ Nhật (hoặc đến hôm nay nếu tuần chưa kết thúc)
-            start_date = today - timedelta(days=today.weekday())
-        elif period_filter == 'monthly':
-            start_date = today.replace(day=1)
-        # 'all_time' thì start_date sẽ là None (không lọc theo ngày bắt đầu)
-        
-        return start_date, end_date # end_date luôn là today cho weekly/monthly để tính đến hiện tại
 
-    def _calculate_points_for_users(self, user_ids, start_date, end_date):
-        """
-        Tính tổng điểm cho danh sách user_ids trong khoảng thời gian cho trước.
-        Bao gồm điểm từ UserPracticeLog và UserChallengeAttempt.
-        """
-        user_points_map = {user_id: 0 for user_id in user_ids}
-
-        # 1. Điểm từ UserPracticeLog
-        practice_logs_query = UserPracticeLog.objects.filter(user_id__in=user_ids)
-        if start_date:
-            # practice_date là DateTimeField, cần so sánh cẩn thận
-            # Nếu start_date là đầu ngày, end_date là cuối ngày
-            datetime_start = timezone.make_aware(timezone.datetime.combine(start_date, timezone.datetime.min.time())) if start_date else None
-            datetime_end = timezone.make_aware(timezone.datetime.combine(end_date, timezone.datetime.max.time())) if end_date else None
-            
-            if datetime_start:
-                practice_logs_query = practice_logs_query.filter(practice_date__gte=datetime_start)
-            if datetime_end: # Luôn có end_date cho weekly/monthly
-                 practice_logs_query = practice_logs_query.filter(practice_date__lte=datetime_end)
-
-        practice_points = practice_logs_query.values('user_id').annotate(
-            total_practice_score=Sum('score')
-        ).order_by('user_id')
-
-        for entry in practice_points:
-            if entry['user_id'] in user_points_map and entry['total_practice_score'] is not None:
-                user_points_map[entry['user_id']] += int(entry['total_practice_score'])
-
-        # 2. Điểm từ UserChallengeAttempt (chỉ tính challenge đã 'completed')
-        challenge_attempts_query = UserChallengeAttempt.objects.filter(user_id__in=user_ids, status='completed')
-        if start_date: # Lọc theo ngày hoàn thành challenge
-            if datetime_start:
-                challenge_attempts_query = challenge_attempts_query.filter(completed_at__gte=datetime_start)
-            if datetime_end: # Luôn có end_date
-                challenge_attempts_query = challenge_attempts_query.filter(completed_at__lte=datetime_end)
-        
-        challenge_points = challenge_attempts_query.values('user_id').annotate(
-            total_challenge_points_earned=Sum('points_earned')
-        ).order_by('user_id')
-
-        for entry in challenge_points:
-            if entry['user_id'] in user_points_map and entry['total_challenge_points_earned'] is not None:
-                user_points_map[entry['user_id']] += entry['total_challenge_points_earned']
-        
-        return user_points_map
-
+class YourRankingView(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        period_filter = request.query_params.get('period', 'all_time') # 'weekly', 'monthly', 'all_time'
-        # language_filter = request.query_params.get('language', None) # Tạm thời chưa dùng
+        user = request.user
+        # Tổng điểm
+        total = (
+            UserChallengeAttempt.objects
+            .values('user_id')
+            .annotate(total=Sum('challenge__points'))
+            .order_by('-total')
+        )
 
-        start_date, end_date = self._get_date_range(period_filter)
+        user_points = 0
+        rank = 0
+        for idx, entry in enumerate(total):
+            if entry['user_id'] == user.id:
+                user_points = entry['total']
+                rank = idx + 1
+                break
 
-        # Lấy tất cả user active (hoặc có hoạt động gần đây để tối ưu)
-        # Để đơn giản, ban đầu lấy tất cả users. Cần tối ưu cho hệ thống lớn.
-        all_users = User.objects.filter(is_active=True) # Có thể thêm .only('id', 'username', 'first_name', 'last_name')
+        # Tính streak của user hiện tại
+        today = timezone.now().date()
+        streak = 0
+        for i in range(1, 100):
+            day = today - timezone.timedelta(days=i)
+            if UserChallengeAttempt.objects.filter(user=user, attempt_time__date=day).exists():
+                streak += 1
+            else:
+                break
 
-        # Tính điểm cho tất cả users
-        # Lưu ý: Việc này có thể rất chậm với nhiều users. Cần cơ chế caching hoặc pre-computation.
-        user_ids = list(all_users.values_list('id', flat=True))
-        user_total_points_map = self._calculate_points_for_users(user_ids, start_date, end_date)
-        
-        leaderboard_data = []
-        for user_obj in all_users:
-            total_points = user_total_points_map.get(user_obj.id, 0)
-            if total_points == 0 and period_filter != 'all_time': # Chỉ hiện user có điểm trong kỳ nếu không phải all_time
-                continue
+        return Response(YourRankingSerializer({
+            'rank': rank,
+            'total_users': len(total),
+            'total_points': user_points,
+            'current_streak': streak
+        }).data)
 
-            user_streak, _ = UserChallengeStreak.objects.get_or_create(user=user_obj)
-            
-            leaderboard_data.append({
-                'user_id': user_obj.id, # Giữ user_id để map lại với user_obj
-                'user_instance': user_obj, # Giữ instance để serialize
-                'total_points': total_points,
-                'current_streak_days': user_streak.current_streak_days if user_streak else 0,
-            })
-
-        # Sắp xếp leaderboard theo tổng điểm, sau đó theo streak
-        leaderboard_data.sort(key=lambda x: (x['total_points'], x['current_streak_days']), reverse=True)
-
-        # Gán rank và serialize
-        ranked_leaderboard_entries = []
-        current_user_rank = None
-        current_user_id = request.user.id if request.user.is_authenticated else None
-        
-        for i, entry_data in enumerate(leaderboard_data):
-            rank = i + 1
-            serialized_user = GlobalLeaderboardUserSerializer(entry_data['user_instance']).data
-            
-            ranked_leaderboard_entries.append({
-                'rank': rank,
-                'user': serialized_user,
-                'total_points': entry_data['total_points'],
-                'current_streak_days': entry_data['current_streak_days'],
-                # 'trend_percentage': 0 # Mock trend
-            })
-            if current_user_id and entry_data['user_id'] == current_user_id:
-                current_user_rank = rank
-        
-        # Lấy top N (ví dụ: top 100 cho bảng, top 3 cho card)
-        top_3_users = ranked_leaderboard_entries[:3]
-        table_rankings = ranked_leaderboard_entries # Hoặc ranked_leaderboard_entries[:100] nếu muốn giới hạn
-
-        # Thông tin "Your Ranking"
-        total_learners = all_users.count()
-        user_ranking_stats_data = None
-        if current_user_id:
-            current_user_points = user_total_points_map.get(current_user_id, 0)
-            user_streak_obj, _ = UserChallengeStreak.objects.get_or_create(user_id=current_user_id)
-            current_user_streak = user_streak_obj.current_streak_days if user_streak_obj else 0
-            
-            points_to_next = None
-            if current_user_rank and current_user_rank > 1:
-                user_ahead_points = leaderboard_data[current_user_rank - 2]['total_points'] # -2 vì index từ 0 và rank từ 1
-                points_to_next = max(0, user_ahead_points - current_user_points +1)
-
-
-            user_ranking_stats_data = {
-                'current_rank': current_user_rank,
-                'total_learners': total_learners,
-                'points_to_next_tier': points_to_next, # Cần logic cụ thể cho "next tier"
-                'user_total_points': current_user_points,
-                'user_current_streak_days': current_user_streak
-            }
-
-        return Response({
-            "your_ranking_stats": user_ranking_stats_data,
-            "top_performers": top_3_users, # Top 3 users
-            "leaderboard_rankings": table_rankings, # Danh sách cho bảng
-            "filter_options": {"period": period_filter} # Thông tin filter đã áp dụng
-        }, status=status.HTTP_200_OK)
-    
 ##################################################### AI #######################################################
 from .utils.mistral_api import ask_mistral
 from gtts import gTTS

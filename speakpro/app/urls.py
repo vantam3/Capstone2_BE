@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import home, RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView, SpeakingTextSearchView, UserPracticeLogView, DashboardStatsView, admin_dashboard
 from .views import  GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView,UserListView
+from .views import ChallengeListView, ChallengeDetailView, UserChallengeAttemptView, UserChallengeHistoryView, UserChallengeStatsView,LeaderboardView, YourRankingView
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import home
@@ -21,45 +22,14 @@ urlpatterns = [
     # --- Dashboard Stats URL ---
     path('dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
     # Challenge Categories
-    path('api/challenge-categories/', 
-         views.ChallengeCategoryViewSet.as_view({'get': 'list'}), 
-         name='challenge-category-list'),
-    path('api/challenge-categories/<int:pk>/', 
-         views.ChallengeCategoryViewSet.as_view({'get': 'retrieve'}), 
-         name='challenge-category-detail'),
-
-    # Challenges
-    path('api/challenges/', 
-         views.ChallengeViewSet.as_view({'get': 'list'}), 
-         name='challenge-list'),
-    path('api/challenges/<int:pk>/', 
-         views.ChallengeViewSet.as_view({'get': 'retrieve'}), 
-         name='challenge-detail'),
-    
-    # Custom actions cho ChallengeViewSet
-    path('api/challenges/<int:pk>/start/', 
-         views.ChallengeViewSet.as_view({'post': 'start_challenge'}), 
-         name='challenge-start'),
-    path('api/challenges/<int:pk>/exercises/',
-         views.ChallengeViewSet.as_view({'get': 'list_exercises_with_status'}),
-         name='challenge-list-exercises-with-status'),
-    path('api/challenges/<int:pk>/leaderboard/', 
-         views.ChallengeViewSet.as_view({'get': 'leaderboard'}), 
-         name='challenge-leaderboard'),
-
-    #Submit Challenge Exercise Attempt
-    path('api/challenges/<int:challenge_pk>/exercises/<int:exercise_pk>/submit-attempt/', 
-         views.ChallengeExerciseSubmitAttemptView.as_view(), 
-         name='challenge-exercise-submit-attempt'),
+    path('api/challenges/', ChallengeListView.as_view()),
+    path('api/challenges/<int:pk>/', ChallengeDetailView.as_view()),
+    path('api/challenges/attempt/', UserChallengeAttemptView.as_view()),
+    path('api/challenges/attempts/history/', UserChallengeHistoryView.as_view()),
+    path('api/challenges/user/stats/', UserChallengeStatsView.as_view()),
     # Leadersboard     
-    path('api/global-leaderboard/', 
-         views.GlobalLeaderboardView.as_view(), 
-         name='global-leaderboard'),
-
-    # User Challenge Data & Achievements 
-    path('api/user-challenge-data/', 
-         views.UserChallengeDataView.as_view(), 
-         name='user-challenge-data'),
+    path('api/leaderboard/', LeaderboardView.as_view()),
+    path('api/leaderboard/your-rank/', YourRankingView.as_view()),
     # Thể loại
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),
