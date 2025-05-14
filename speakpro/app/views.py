@@ -187,6 +187,28 @@ def admin_dashboard(request):
     return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
 
 # ==============================================================================
+# api search
+from rest_framework import generics
+from django.db.models import Q
+from .models import SpeakingText
+from .serializers import SpeakingTextSerializer
+
+class SpeakingTextSearchAPIView(generics.ListAPIView):
+    serializer_class = SpeakingTextSerializer
+
+    def get_queryset(self):
+        queryset = SpeakingText.objects.all()
+        genre_id = self.request.query_params.get('genre', None)
+        title = self.request.query_params.get('title', None)
+
+        if genre_id:
+            queryset = queryset.filter(genre_id=genre_id)
+
+        if title:
+            queryset = queryset.filter(title__icontains=title)  # tìm gần đúng, không phân biệt hoa thường
+
+        return queryset
+# ==============================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):
     def get(self, request):

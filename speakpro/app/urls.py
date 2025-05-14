@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import  GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView,UserListView
-from .views import RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard
+from .views import RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import home
@@ -17,6 +17,8 @@ urlpatterns = [
     path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),  # Route cho quên mật khẩu
     path('reset-password/', ResetPasswordView.as_view(), name='reset_password'),  # Route cho đặt lại mật khẩu
     path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
+    # Search
+    path('speaking-text/search/', SpeakingTextSearchAPIView.as_view(), name='speakingtext-search'),
     # GENRES
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),
