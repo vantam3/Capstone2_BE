@@ -18,6 +18,175 @@ from django.core.files.storage import default_storage
 from rest_framework import generics
 def home(request):
     return HttpResponse("SPEAKING PRO API")
+# ==============================================================================
+# API authentication
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import authenticate, get_user_model
+from django.core.mail import send_mail
+from .serializers import ResetPasswordSerializer
+from django.core.cache import cache
+import random
+import string
+
+class RegisterView(APIView):
+    def post(self, request):
+        data = request.data
+
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        confirm_password = data.get('confirm_password')
+
+        # Check if passwords match
+        if password != confirm_password:
+            return Response({'error': 'Passwords do not match!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if email already exists
+        if User.objects.filter(email=email).exists():
+            return Response({'error': 'Email already exists!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if username already exists (added for robustness, User model requires unique username)
+        if User.objects.filter(username=username).exists():
+             return Response({'error': 'Username already exists!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create the new user
+        user = User.objects.create_user(
+            username=username,  # Username is now the unique identifier
+            email=email,  # Email used for login and notifications
+            password=password
+        )
+
+        return Response({'message': 'User registered successfully!'}, status=status.HTTP_201_CREATED)
+
+
+class LoginView(APIView):
+    def post(self, request):
+        data = request.data
+        username = data.get('username')
+        password = data.get('password')
+
+        try:
+            # Find user by username
+            user = User.objects.get(username=username)
+
+            # Authenticate user with username and password
+            auth_user = authenticate(request, username=user.username, password=password)
+
+            if auth_user is None:
+                return Response({'message': 'Invalid password!'},
+                                status=status.HTTP_401_UNAUTHORIZED)
+
+            # Generate token
+            refresh = RefreshToken.for_user(auth_user)
+            return Response({
+                'token': str(refresh.access_token),
+                'user': {
+                    'id': auth_user.id,
+                    'first_name': auth_user.first_name,
+                    'last_name': auth_user.last_name,
+                    'email': auth_user.email,
+                    'is_superuser': auth_user.is_superuser,
+                }
+            }, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            return Response({'message': 'User with this username does not exist!'},
+                            status=status.HTTP_401_UNAUTHORIZED)
+
+class LogoutView(APIView):
+    def post(self, request):
+        try:
+            # Get refresh token from request
+            refresh_token = request.data.get('refresh_token')
+            if not refresh_token:
+                 return Response({"error": "Refresh token is required"}, status=status.HTTP_400_BAD_REQUEST)
+            token = RefreshToken(refresh_token)
+            token.blacklist()  # Add token to blacklist
+
+            return Response({"message": "Logged out successfully"}, status=status.HTTP_205_RESET_CONTENT)
+        except Exception as e:
+            # Catch specific exceptions like TokenError if possible
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class ForgotPasswordView(APIView):
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required!'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # Return success-like message even if user doesn't exist to avoid email enumeration
+            return Response({'message': 'If an account with this email exists, a confirmation code has been sent.'}, status=status.HTTP_200_OK)
+            # Or be explicit: return Response({'error': 'User with this email does not exist!'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Generate a confirmation code
+        confirmation_code = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+
+        # Store the confirmation code in cache with a timeout (e.g., 10 minutes)
+        cache.set(f"password_reset_code_{email}", confirmation_code, timeout=600)
+
+        try:
+            send_mail(
+                subject="Password Reset Confirmation Code - Speakpro", # Updated subject
+                message=f"Hello {user.username or user.first_name or 'User'},\n\nYour confirmation code is: {confirmation_code}\nUse this code to reset your password. It will expire in 10 minutes.",
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[email],
+                fail_silently=False,
+            )
+            return Response({'message': 'Confirmation code sent to your email!'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Log the error e for debugging
+            print(f"Error sending password reset email to {email}: {e}")
+            return Response({'error': 'Failed to send email. Please try again later.'}, # Removed details from response 'details': str(e)
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ResetPasswordView(APIView):
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = serializer.validated_data['email']
+        confirmation_code = serializer.validated_data['confirmation_code']
+        new_password = serializer.validated_data['new_password']
+
+        # Retrieve the confirmation code from cache
+        cached_code = cache.get(f"password_reset_code_{email}")
+
+        if not cached_code:
+            return Response({'error': 'Expired confirmation code! Please request a new one.'}, status=status.HTTP_400_BAD_REQUEST)
+        if cached_code != confirmation_code:
+             return Response({'error': 'Invalid confirmation code!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # This case should ideally not happen if ForgotPasswordView checks, but good to have.
+            return Response({'error': 'User with this email does not exist!'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Update the password
+        user.set_password(new_password)
+        user.save()
+
+        # Clear the confirmation code from cache
+        cache.delete(f"password_reset_code_{email}")
+
+        return Response({'message': 'Password has been reset successfully!'}, status=status.HTTP_200_OK)
+
+def is_admin(user):
+    return user.is_authenticated and user.is_superuser  
+
+@permission_classes([IsAuthenticated])
+@api_view(['GET'])
+def admin_dashboard(request):
+    if is_admin(request.user):
+        return Response({'message': 'Welcome Admin!'}, status=status.HTTP_200_OK)
+    return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+# ==============================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):
     def get(self, request):

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import Genre, SpeakingText, Audio, UserAudio, SpeakingResult, Level
 from django.contrib.auth.models import User
-from rest_framework import serializers
+from rest_framework.serializers import Serializer, CharField
 import base64
 # Serializer cho Genre
 class GenreSerializer(serializers.ModelSerializer):
@@ -76,3 +76,12 @@ class SpeakingResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = SpeakingResult
         fields = ['speaking_text', 'user_text', 'score', 'timestamp']
+
+class ResetPasswordSerializer(Serializer):
+    email = CharField(required=True)
+    confirmation_code = CharField(required=True)
+    new_password = CharField(required=True)
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True)
+    confirm_password = serializers.CharField(required=True)

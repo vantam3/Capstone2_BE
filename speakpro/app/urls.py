@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import  GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView,UserListView
+from .views import RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import home
@@ -9,7 +10,13 @@ urlpatterns = [
     path('', home, name='home'),
     path('users/', UserListView.as_view(), name='user-list'),  
     path('users/<int:id>/', views.UserDetailAPIView.as_view(), name='user-detail'),
-
+    # AUTH
+    path('register/', RegisterView.as_view(), name='register'),  # Route cho đăng ký
+    path('login/', LoginView.as_view(), name='login'),  # Route cho đăng nhập
+    path('logout/', LogoutView.as_view(), name='logout'),  # Route cho đăng xuất
+    path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),  # Route cho quên mật khẩu
+    path('reset-password/', ResetPasswordView.as_view(), name='reset_password'),  # Route cho đặt lại mật khẩu
+    path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
     # GENRES
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),
