@@ -102,3 +102,17 @@ class UserExerciseAttempt(models.Model):
     score = models.FloatField()
     detailed_feedback = models.JSONField()
     attempted_at = models.DateTimeField(auto_now_add=True)
+# Bảng để lưu xếp hạng người dùng
+class UserLoginStreak(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    last_login_date = models.DateField(null=True, blank=True)
+    streak_count = models.IntegerField(default=0)
+
+class UserWeeklyScore(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    year = models.IntegerField()
+    week = models.IntegerField()
+    total_score = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = ('user', 'year', 'week')

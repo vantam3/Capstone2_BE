@@ -253,6 +253,29 @@ class SubmitExerciseAttemptAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
 
+    def update_user_weekly_score(self, user, score):
+        today = timezone.now().date()
+        year, week, _ = today.isocalendar()
+        obj, created = UserWeeklyScore.objects.get_or_create(user=user, year=year, week=week)
+        obj.total_score += score
+        obj.save()
+
+    def update_user_streak(self, user):
+        today = timezone.now().date()
+        streak, created = UserLoginStreak.objects.get_or_create(user=user)
+
+        if streak.last_login_date is None:
+            streak.streak_count = 1
+        else:
+            delta = (today - streak.last_login_date).days
+            if delta == 1:
+                streak.streak_count += 1
+            elif delta > 1:
+                streak.streak_count = 1  # reset nếu gián đoạn
+
+        streak.last_login_date = today
+        streak.save()
+
     def post(self, request, exercise_pk):
         user = request.user
         audio_file = request.FILES.get('audio_file')
@@ -287,6 +310,7 @@ class SubmitExerciseAttemptAPIView(APIView):
         except Exception:
             return Response({"error": "Failed to decode original text"}, status=500)
 
+        # Tính điểm
         result = calculate_score(transcribed_text, original_text)
 
         # [4] Lưu tiến trình
@@ -310,8 +334,14 @@ class SubmitExerciseAttemptAPIView(APIView):
             progress.completed_date = timezone.now()
         progress.save()
 
+        # [5] Cập nhật bảng điểm tuần và chuỗi đăng nhập
+        self.update_user_weekly_score(user, result['score'])
+        self.update_user_streak(user)
+
+        # Dọn dẹp file tạm
         os.remove(full_path)
         os.remove(wav_path)
+
         return Response(result, status=200)
 
 class MyChallengeProgressAPIView(APIView):
@@ -320,6 +350,71 @@ class MyChallengeProgressAPIView(APIView):
         progresses = UserChallengeProgress.objects.filter(user=request.user)
         serializer = UserChallengeProgressSerializer(progresses, many=True)
         return Response(serializer.data)
+# ==========================================================================================================================================
+# API leaderboard
+from .models import UserWeeklyScore, UserLoginStreak
+
+class LeaderboardAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        period = request.query_params.get('period', 'Weekly')  # Weekly, Monthly, AllTime
+        today = timezone.now().date()
+
+        if period == 'Weekly':
+            # Get current ISO week and year
+            year, week, _ = today.isocalendar()
+            scores = UserWeeklyScore.objects.filter(year=year, week=week).order_by('-total_score').select_related('user')
+            leaderboard = [{"user_id": s.user.id, "username": s.user.username, "score": s.total_score} for s in scores[:10]]
+
+        elif period == 'Monthly':
+            first_day_month = today.replace(day=1)
+            # Sum all scores of the month
+            scores = UserWeeklyScore.objects.filter(
+                year=today.year,
+                week__gte=first_day_month.isocalendar()[1],
+                week__lte=today.isocalendar()[1]
+            ).values('user').annotate(total=Sum('total_score')).order_by('-total')
+            user_ids = [s['user'] for s in scores[:10]]
+            users = User.objects.filter(id__in=user_ids)
+            leaderboard = []
+            for s in scores[:10]:
+                user = next((u for u in users if u.id == s['user']), None)
+                if user:
+                    leaderboard.append({"user_id": user.id, "username": user.username, "score": s['total']})
+
+        else:  # All Time
+            users = User.objects.annotate(total_score=Sum('userchallengeprogress__score')).order_by('-total_score')
+            leaderboard = [{"user_id": u.id, "username": u.username, "score": u.total_score or 0} for u in users[:10]]
+
+        # Lấy streak và trend của user hiện tại
+        streak = 0
+        trend = 0
+
+        try:
+            user_streak = UserLoginStreak.objects.get(user=request.user)
+            streak = user_streak.streak_count
+        except UserLoginStreak.DoesNotExist:
+            streak = 0
+
+        # Trend: so sánh điểm tuần này và tuần trước
+        year, week, _ = today.isocalendar()
+        this_week_score = UserWeeklyScore.objects.filter(user=request.user, year=year, week=week).aggregate(Sum('total_score'))['total_score__sum'] or 0
+        last_week = week - 1 if week > 1 else 52
+        last_week_year = year if week > 1 else year - 1
+        last_week_score = UserWeeklyScore.objects.filter(user=request.user, year=last_week_year, week=last_week).aggregate(Sum('total_score'))['total_score__sum'] or 0
+
+        if last_week_score == 0:
+            trend = 100 if this_week_score > 0 else 0
+        else:
+            trend = ((this_week_score - last_week_score) / last_week_score) * 100
+
+        return Response({
+            "leaderboard": leaderboard,
+            "user_streak": streak,
+            "user_trend_percent": round(trend, 2),
+        })
+
 # ==========================================================================================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):
