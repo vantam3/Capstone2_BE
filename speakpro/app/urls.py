@@ -1,6 +1,9 @@
 from django.urls import path
 from .views import  GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView,UserListView
-from .views import RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView
+from .views import (
+    RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView,
+    ChallengeListAPIView, ChallengeDetailAPIView, StartChallengeAPIView, SubmitExerciseAttemptAPIView, MyChallengeProgressAPIView
+    )
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import home
@@ -19,6 +22,12 @@ urlpatterns = [
     path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
     # Search
     path('speaking-text/search/', SpeakingTextSearchAPIView.as_view(), name='speakingtext-search'),
+    # CHALLENGE
+    path('api/challenges/', ChallengeListAPIView.as_view()),
+    path('api/challenges/<int:challenge_pk>/', ChallengeDetailAPIView.as_view()),
+    path('api/challenges/<int:challenge_pk>/start/', StartChallengeAPIView.as_view()),
+    path('api/challenges/exercises/<int:exercise_pk>/submit_attempt/', SubmitExerciseAttemptAPIView.as_view()),
+    path('api/me/challenges/progress/', MyChallengeProgressAPIView.as_view()),
     # GENRES
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),

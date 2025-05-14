@@ -186,7 +186,7 @@ def admin_dashboard(request):
         return Response({'message': 'Welcome Admin!'}, status=status.HTTP_200_OK)
     return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
 
-# ==============================================================================
+# ==========================================================================================================================================
 # api search
 from rest_framework import generics
 from django.db.models import Q
@@ -205,10 +205,122 @@ class SpeakingTextSearchAPIView(generics.ListAPIView):
             queryset = queryset.filter(genre_id=genre_id)
 
         if title:
-            queryset = queryset.filter(title__icontains=title)  # tìm gần đúng, không phân biệt hoa thường
+            queryset = queryset.filter(title__icontains=title)
 
         return queryset
-# ==============================================================================
+# ==========================================================================================================================================
+# API Challenge
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Challenge, ChallengeExercise, UserChallengeProgress, UserExerciseAttempt
+from .serializers import ChallengeSerializer, UserChallengeProgressSerializer
+from .utils.score import calculate_score
+from pydub import AudioSegment
+import speech_recognition as sr
+import os
+from django.utils import timezone
+from django.core.files.storage import default_storage
+class ChallengeListAPIView(APIView):
+    def get(self, request):
+        challenges = Challenge.objects.all()
+        serializer = ChallengeSerializer(challenges, many=True)
+        return Response(serializer.data)
+
+class ChallengeDetailAPIView(APIView):
+    def get(self, request, challenge_pk):
+        try:
+            challenge = Challenge.objects.get(pk=challenge_pk)
+        except Challenge.DoesNotExist:
+            return Response({"error": "Challenge not found"}, status=404)
+        serializer = ChallengeSerializer(challenge)
+        return Response(serializer.data)
+
+class StartChallengeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, challenge_pk):
+        user = request.user
+        challenge = Challenge.objects.get(pk=challenge_pk)
+        progress, _ = UserChallengeProgress.objects.get_or_create(user=user, challenge=challenge)
+        if progress.status == 'not_started':
+            progress.status = 'in_progress'
+            progress.save()
+        return Response({"message": "Challenge started", "status": progress.status})
+
+class SubmitExerciseAttemptAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request, exercise_pk):
+        user = request.user
+        audio_file = request.FILES.get('audio_file')
+        if not audio_file:
+            return Response({"error": "Missing audio file"}, status=400)
+
+        try:
+            exercise = ChallengeExercise.objects.get(pk=exercise_pk)
+        except ChallengeExercise.DoesNotExist:
+            return Response({"error": "Exercise not found"}, status=404)
+
+        # [1] Chuyển đổi WebM -> WAV
+        temp_path = default_storage.save('temp_challenge_input.webm', audio_file)
+        full_path = os.path.join(default_storage.location, temp_path)
+        wav_path = full_path.replace('.webm', '.wav')
+        sound = AudioSegment.from_file(full_path, format="webm")
+        sound.export(wav_path, format="wav")
+
+        # [2] Nhận diện giọng nói
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            try:
+                transcribed_text = recognizer.recognize_google(audio_data, language="en-US")
+            except Exception:
+                return Response({"error": "Speech recognition failed"}, status=500)
+
+        # [3] Giải mã content gốc
+        try:
+            original_bytes = bytes.fromhex(exercise.speaking_text_content.decode("utf-8"))
+            original_text = original_bytes.decode("utf-8")
+        except Exception:
+            return Response({"error": "Failed to decode original text"}, status=500)
+
+        result = calculate_score(transcribed_text, original_text)
+
+        # [4] Lưu tiến trình
+        challenge = exercise.challenge
+        progress, _ = UserChallengeProgress.objects.get_or_create(user=user, challenge=challenge)
+        UserExerciseAttempt.objects.create(
+            user_challenge_progress=progress,
+            challenge_exercise=exercise,
+            user_audio_file_path=audio_file,
+            transcribed_text=transcribed_text,
+            score=result['score'],
+            detailed_feedback=result
+        )
+
+        progress.score += result['score']
+        total = challenge.exercises.count()
+        done = UserExerciseAttempt.objects.filter(user_challenge_progress=progress).values('challenge_exercise').distinct().count()
+        progress.completion_percentage = round(100 * done / total, 2)
+        if progress.completion_percentage == 100:
+            progress.status = 'completed'
+            progress.completed_date = timezone.now()
+        progress.save()
+
+        os.remove(full_path)
+        os.remove(wav_path)
+        return Response(result, status=200)
+
+class MyChallengeProgressAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        progresses = UserChallengeProgress.objects.filter(user=request.user)
+        serializer = UserChallengeProgressSerializer(progresses, many=True)
+        return Response(serializer.data)
+# ==========================================================================================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):
     def get(self, request):

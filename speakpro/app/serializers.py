@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Genre, SpeakingText, Audio, UserAudio, SpeakingResult, Level
+from .models import Genre, SpeakingText, Audio, UserAudio, SpeakingResult, Level, Challenge, User, UserChallengeProgress, ChallengeExercise
 from django.contrib.auth.models import User
 from rest_framework.serializers import Serializer, CharField
 import base64
@@ -76,7 +76,7 @@ class SpeakingResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = SpeakingResult
         fields = ['speaking_text', 'user_text', 'score', 'timestamp']
-
+# password serializer
 class ResetPasswordSerializer(Serializer):
     email = CharField(required=True)
     confirmation_code = CharField(required=True)
@@ -85,3 +85,29 @@ class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)
     new_password = serializers.CharField(required=True)
     confirm_password = serializers.CharField(required=True)
+
+# challenge serializer
+class ChallengeExerciseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChallengeExercise
+        fields = ['id', 'title', 'description', 'order']
+
+class ChallengeSerializer(serializers.ModelSerializer):
+    exercises = ChallengeExerciseSerializer(many=True, read_only=True)
+    days_left = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Challenge
+        fields = ['id', 'title', 'description', 'is_featured', 'difficulty', 'reward_points', 
+                  'start_date', 'end_date', 'participant_count', 'level', 'days_left', 'exercises']
+
+    def get_days_left(self, obj):
+        from datetime import datetime
+        delta = obj.end_date - datetime.now(obj.end_date.tzinfo)
+        return f"{delta.days} days left" if delta.days > 0 else "Ended"
+
+class UserChallengeProgressSerializer(serializers.ModelSerializer):
+    challenge = ChallengeSerializer()
+    class Meta:
+        model = UserChallengeProgress
+        fields = ['id', 'challenge', 'score', 'completion_percentage', 'status', 'last_attempted_date', 'completed_date']
