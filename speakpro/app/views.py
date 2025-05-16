@@ -353,7 +353,7 @@ class MyChallengeProgressAPIView(APIView):
 # ==========================================================================================================================================
 # API leaderboard
 from .models import UserWeeklyScore, UserLoginStreak
-
+from django.db.models import Sum
 class LeaderboardAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -369,7 +369,7 @@ class LeaderboardAPIView(APIView):
 
         elif period == 'Monthly':
             first_day_month = today.replace(day=1)
-            # Sum all scores of the month
+            # Sum all scores of the month     
             scores = UserWeeklyScore.objects.filter(
                 year=today.year,
                 week__gte=first_day_month.isocalendar()[1],
