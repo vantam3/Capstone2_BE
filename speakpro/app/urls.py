@@ -1,5 +1,10 @@
 from django.urls import path
 from .views import  GenreListView, GenreDetailView, SpeakingTextListView, SpeakingTextDetailView, AudioListView, AudioDetailView,UserListView
+from .views import (
+    RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView,
+    ChallengeListAPIView, ChallengeDetailAPIView, StartChallengeAPIView, SubmitExerciseAttemptAPIView, MyChallengeProgressAPIView,
+    LeaderboardAPIView
+    )
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import home
@@ -9,7 +14,23 @@ urlpatterns = [
     path('', home, name='home'),
     path('users/', UserListView.as_view(), name='user-list'),  
     path('users/<int:id>/', views.UserDetailAPIView.as_view(), name='user-detail'),
-
+    # AUTH
+    path('register/', RegisterView.as_view(), name='register'),  # Route cho đăng ký
+    path('login/', LoginView.as_view(), name='login'),  # Route cho đăng nhập
+    path('logout/', LogoutView.as_view(), name='logout'),  # Route cho đăng xuất
+    path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),  # Route cho quên mật khẩu
+    path('reset-password/', ResetPasswordView.as_view(), name='reset_password'),  # Route cho đặt lại mật khẩu
+    path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
+    # Search
+    path('speaking-text/search/', SpeakingTextSearchAPIView.as_view(), name='speakingtext-search'),
+    # CHALLENGE
+    path('api/challenges/', ChallengeListAPIView.as_view()),
+    path('api/challenges/<int:challenge_pk>/', ChallengeDetailAPIView.as_view()),
+    path('api/challenges/<int:challenge_pk>/start/', StartChallengeAPIView.as_view()),
+    path('api/challenges/exercises/<int:exercise_pk>/submit_attempt/', SubmitExerciseAttemptAPIView.as_view()),
+    path('api/me/challenges/progress/', MyChallengeProgressAPIView.as_view()),
+    # LEADERBOARD
+    path('api/leaderboard/', LeaderboardAPIView.as_view(), name='leaderboard'),
     # GENRES
     path('genres/', GenreListView.as_view(), name='genre-list'),
     path('genres/<int:pk>/', GenreDetailView.as_view(), name='genre-detail'),

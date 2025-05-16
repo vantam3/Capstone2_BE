@@ -18,6 +18,404 @@ from django.core.files.storage import default_storage
 from rest_framework import generics
 def home(request):
     return HttpResponse("SPEAKING PRO API")
+# ==============================================================================
+# API authentication
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import authenticate, get_user_model
+from django.core.mail import send_mail
+from .serializers import ResetPasswordSerializer
+from django.core.cache import cache
+import random
+import string
+
+class RegisterView(APIView):
+    def post(self, request):
+        data = request.data
+
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        confirm_password = data.get('confirm_password')
+
+        # Check if passwords match
+        if password != confirm_password:
+            return Response({'error': 'Passwords do not match!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if email already exists
+        if User.objects.filter(email=email).exists():
+            return Response({'error': 'Email already exists!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if username already exists (added for robustness, User model requires unique username)
+        if User.objects.filter(username=username).exists():
+             return Response({'error': 'Username already exists!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create the new user
+        user = User.objects.create_user(
+            username=username,  # Username is now the unique identifier
+            email=email,  # Email used for login and notifications
+            password=password
+        )
+
+        return Response({'message': 'User registered successfully!'}, status=status.HTTP_201_CREATED)
+
+
+class LoginView(APIView):
+    def post(self, request):
+        data = request.data
+        username = data.get('username')
+        password = data.get('password')
+
+        try:
+            # Find user by username
+            user = User.objects.get(username=username)
+
+            # Authenticate user with username and password
+            auth_user = authenticate(request, username=user.username, password=password)
+
+            if auth_user is None:
+                return Response({'message': 'Invalid password!'},
+                                status=status.HTTP_401_UNAUTHORIZED)
+
+            # Generate token
+            refresh = RefreshToken.for_user(auth_user)
+            return Response({
+                'token': str(refresh.access_token),
+                'user': {
+                    'id': auth_user.id,
+                    'first_name': auth_user.first_name,
+                    'last_name': auth_user.last_name,
+                    'email': auth_user.email,
+                    'is_superuser': auth_user.is_superuser,
+                }
+            }, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            return Response({'message': 'User with this username does not exist!'},
+                            status=status.HTTP_401_UNAUTHORIZED)
+
+class LogoutView(APIView):
+    def post(self, request):
+        try:
+            # Get refresh token from request
+            refresh_token = request.data.get('refresh_token')
+            if not refresh_token:
+                 return Response({"error": "Refresh token is required"}, status=status.HTTP_400_BAD_REQUEST)
+            token = RefreshToken(refresh_token)
+            token.blacklist()  # Add token to blacklist
+
+            return Response({"message": "Logged out successfully"}, status=status.HTTP_205_RESET_CONTENT)
+        except Exception as e:
+            # Catch specific exceptions like TokenError if possible
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class ForgotPasswordView(APIView):
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required!'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # Return success-like message even if user doesn't exist to avoid email enumeration
+            return Response({'message': 'If an account with this email exists, a confirmation code has been sent.'}, status=status.HTTP_200_OK)
+            # Or be explicit: return Response({'error': 'User with this email does not exist!'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Generate a confirmation code
+        confirmation_code = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+
+        # Store the confirmation code in cache with a timeout (e.g., 10 minutes)
+        cache.set(f"password_reset_code_{email}", confirmation_code, timeout=600)
+
+        try:
+            send_mail(
+                subject="Password Reset Confirmation Code - Speakpro", # Updated subject
+                message=f"Hello {user.username or user.first_name or 'User'},\n\nYour confirmation code is: {confirmation_code}\nUse this code to reset your password. It will expire in 10 minutes.",
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[email],
+                fail_silently=False,
+            )
+            return Response({'message': 'Confirmation code sent to your email!'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Log the error e for debugging
+            print(f"Error sending password reset email to {email}: {e}")
+            return Response({'error': 'Failed to send email. Please try again later.'}, # Removed details from response 'details': str(e)
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ResetPasswordView(APIView):
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = serializer.validated_data['email']
+        confirmation_code = serializer.validated_data['confirmation_code']
+        new_password = serializer.validated_data['new_password']
+
+        # Retrieve the confirmation code from cache
+        cached_code = cache.get(f"password_reset_code_{email}")
+
+        if not cached_code:
+            return Response({'error': 'Expired confirmation code! Please request a new one.'}, status=status.HTTP_400_BAD_REQUEST)
+        if cached_code != confirmation_code:
+             return Response({'error': 'Invalid confirmation code!'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # This case should ideally not happen if ForgotPasswordView checks, but good to have.
+            return Response({'error': 'User with this email does not exist!'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Update the password
+        user.set_password(new_password)
+        user.save()
+
+        # Clear the confirmation code from cache
+        cache.delete(f"password_reset_code_{email}")
+
+        return Response({'message': 'Password has been reset successfully!'}, status=status.HTTP_200_OK)
+
+def is_admin(user):
+    return user.is_authenticated and user.is_superuser  
+
+@permission_classes([IsAuthenticated])
+@api_view(['GET'])
+def admin_dashboard(request):
+    if is_admin(request.user):
+        return Response({'message': 'Welcome Admin!'}, status=status.HTTP_200_OK)
+    return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+# ==========================================================================================================================================
+# api search
+from rest_framework import generics
+from django.db.models import Q
+from .models import SpeakingText
+from .serializers import SpeakingTextSerializer
+
+class SpeakingTextSearchAPIView(generics.ListAPIView):
+    serializer_class = SpeakingTextSerializer
+
+    def get_queryset(self):
+        queryset = SpeakingText.objects.all()
+        genre_id = self.request.query_params.get('genre', None)
+        title = self.request.query_params.get('title', None)
+
+        if genre_id:
+            queryset = queryset.filter(genre_id=genre_id)
+
+        if title:
+            queryset = queryset.filter(title__icontains=title)
+
+        return queryset
+# ==========================================================================================================================================
+# API Challenge
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Challenge, ChallengeExercise, UserChallengeProgress, UserExerciseAttempt
+from .serializers import ChallengeSerializer, UserChallengeProgressSerializer
+from .utils.score import calculate_score
+from pydub import AudioSegment
+import speech_recognition as sr
+import os
+from django.utils import timezone
+from django.core.files.storage import default_storage
+class ChallengeListAPIView(APIView):
+    def get(self, request):
+        challenges = Challenge.objects.all()
+        serializer = ChallengeSerializer(challenges, many=True)
+        return Response(serializer.data)
+
+class ChallengeDetailAPIView(APIView):
+    def get(self, request, challenge_pk):
+        try:
+            challenge = Challenge.objects.get(pk=challenge_pk)
+        except Challenge.DoesNotExist:
+            return Response({"error": "Challenge not found"}, status=404)
+        serializer = ChallengeSerializer(challenge)
+        return Response(serializer.data)
+
+class StartChallengeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, challenge_pk):
+        user = request.user
+        challenge = Challenge.objects.get(pk=challenge_pk)
+        progress, _ = UserChallengeProgress.objects.get_or_create(user=user, challenge=challenge)
+        if progress.status == 'not_started':
+            progress.status = 'in_progress'
+            progress.save()
+        return Response({"message": "Challenge started", "status": progress.status})
+
+class SubmitExerciseAttemptAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser]
+
+    def update_user_weekly_score(self, user, score):
+        today = timezone.now().date()
+        year, week, _ = today.isocalendar()
+        obj, created = UserWeeklyScore.objects.get_or_create(user=user, year=year, week=week)
+        obj.total_score += score
+        obj.save()
+
+    def update_user_streak(self, user):
+        today = timezone.now().date()
+        streak, created = UserLoginStreak.objects.get_or_create(user=user)
+
+        if streak.last_login_date is None:
+            streak.streak_count = 1
+        else:
+            delta = (today - streak.last_login_date).days
+            if delta == 1:
+                streak.streak_count += 1
+            elif delta > 1:
+                streak.streak_count = 1  # reset nếu gián đoạn
+
+        streak.last_login_date = today
+        streak.save()
+
+    def post(self, request, exercise_pk):
+        user = request.user
+        audio_file = request.FILES.get('audio_file')
+        if not audio_file:
+            return Response({"error": "Missing audio file"}, status=400)
+
+        try:
+            exercise = ChallengeExercise.objects.get(pk=exercise_pk)
+        except ChallengeExercise.DoesNotExist:
+            return Response({"error": "Exercise not found"}, status=404)
+
+        # [1] Chuyển đổi WebM -> WAV
+        temp_path = default_storage.save('temp_challenge_input.webm', audio_file)
+        full_path = os.path.join(default_storage.location, temp_path)
+        wav_path = full_path.replace('.webm', '.wav')
+        sound = AudioSegment.from_file(full_path, format="webm")
+        sound.export(wav_path, format="wav")
+
+        # [2] Nhận diện giọng nói
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            try:
+                transcribed_text = recognizer.recognize_google(audio_data, language="en-US")
+            except Exception:
+                return Response({"error": "Speech recognition failed"}, status=500)
+
+        # [3] Giải mã content gốc
+        try:
+            original_bytes = bytes.fromhex(exercise.speaking_text_content.decode("utf-8"))
+            original_text = original_bytes.decode("utf-8")
+        except Exception:
+            return Response({"error": "Failed to decode original text"}, status=500)
+
+        # Tính điểm
+        result = calculate_score(transcribed_text, original_text)
+
+        # [4] Lưu tiến trình
+        challenge = exercise.challenge
+        progress, _ = UserChallengeProgress.objects.get_or_create(user=user, challenge=challenge)
+        UserExerciseAttempt.objects.create(
+            user_challenge_progress=progress,
+            challenge_exercise=exercise,
+            user_audio_file_path=audio_file,
+            transcribed_text=transcribed_text,
+            score=result['score'],
+            detailed_feedback=result
+        )
+
+        progress.score += result['score']
+        total = challenge.exercises.count()
+        done = UserExerciseAttempt.objects.filter(user_challenge_progress=progress).values('challenge_exercise').distinct().count()
+        progress.completion_percentage = round(100 * done / total, 2)
+        if progress.completion_percentage == 100:
+            progress.status = 'completed'
+            progress.completed_date = timezone.now()
+        progress.save()
+
+        # [5] Cập nhật bảng điểm tuần và chuỗi đăng nhập
+        self.update_user_weekly_score(user, result['score'])
+        self.update_user_streak(user)
+
+        # Dọn dẹp file tạm
+        os.remove(full_path)
+        os.remove(wav_path)
+
+        return Response(result, status=200)
+
+class MyChallengeProgressAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        progresses = UserChallengeProgress.objects.filter(user=request.user)
+        serializer = UserChallengeProgressSerializer(progresses, many=True)
+        return Response(serializer.data)
+# ==========================================================================================================================================
+# API leaderboard
+from .models import UserWeeklyScore, UserLoginStreak
+
+class LeaderboardAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        period = request.query_params.get('period', 'Weekly')  # Weekly, Monthly, AllTime
+        today = timezone.now().date()
+
+        if period == 'Weekly':
+            # Get current ISO week and year
+            year, week, _ = today.isocalendar()
+            scores = UserWeeklyScore.objects.filter(year=year, week=week).order_by('-total_score').select_related('user')
+            leaderboard = [{"user_id": s.user.id, "username": s.user.username, "score": s.total_score} for s in scores[:10]]
+
+        elif period == 'Monthly':
+            first_day_month = today.replace(day=1)
+            # Sum all scores of the month
+            scores = UserWeeklyScore.objects.filter(
+                year=today.year,
+                week__gte=first_day_month.isocalendar()[1],
+                week__lte=today.isocalendar()[1]
+            ).values('user').annotate(total=Sum('total_score')).order_by('-total')
+            user_ids = [s['user'] for s in scores[:10]]
+            users = User.objects.filter(id__in=user_ids)
+            leaderboard = []
+            for s in scores[:10]:
+                user = next((u for u in users if u.id == s['user']), None)
+                if user:
+                    leaderboard.append({"user_id": user.id, "username": user.username, "score": s['total']})
+
+        else:  # All Time
+            users = User.objects.annotate(total_score=Sum('userchallengeprogress__score')).order_by('-total_score')
+            leaderboard = [{"user_id": u.id, "username": u.username, "score": u.total_score or 0} for u in users[:10]]
+
+        # Lấy streak và trend của user hiện tại
+        streak = 0
+        trend = 0
+
+        try:
+            user_streak = UserLoginStreak.objects.get(user=request.user)
+            streak = user_streak.streak_count
+        except UserLoginStreak.DoesNotExist:
+            streak = 0
+
+        # Trend: so sánh điểm tuần này và tuần trước
+        year, week, _ = today.isocalendar()
+        this_week_score = UserWeeklyScore.objects.filter(user=request.user, year=year, week=week).aggregate(Sum('total_score'))['total_score__sum'] or 0
+        last_week = week - 1 if week > 1 else 52
+        last_week_year = year if week > 1 else year - 1
+        last_week_score = UserWeeklyScore.objects.filter(user=request.user, year=last_week_year, week=last_week).aggregate(Sum('total_score'))['total_score__sum'] or 0
+
+        if last_week_score == 0:
+            trend = 100 if this_week_score > 0 else 0
+        else:
+            trend = ((this_week_score - last_week_score) / last_week_score) * 100
+
+        return Response({
+            "leaderboard": leaderboard,
+            "user_streak": streak,
+            "user_trend_percent": round(trend, 2),
+        })
+
+# ==========================================================================================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):
     def get(self, request):

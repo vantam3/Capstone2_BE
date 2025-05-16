@@ -103,7 +103,7 @@ WSGI_APPLICATION = 'speakpro.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'speakpro',  # Tên cơ sở dữ liệu bạn đã tạo
+        'NAME': 'speakpro',  # Tên cơ sở dữ liệu 
         'USER': 'root',    # Tên người dùng MySQL
         'PASSWORD': '123456',  # Mật khẩu MySQL
         'HOST': 'localhost',      # Hoặc IP của máy chủ MySQL nếu không cài đặt trên máy cục bộ
@@ -154,3 +154,19 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 from dotenv import load_dotenv
 load_dotenv()
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),  # Thời gian sống của access token
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),  # Thời gian sống của refresh token
+    'ROTATE_REFRESH_TOKENS': True,  # Tùy chọn quay lại refresh token sau mỗi yêu cầu
+    'BLACKLIST_AFTER_ROTATION': True,  # Xóa refresh token cũ sau khi quay lại
+    'UPDATE_LAST_LOGIN': True,  # Cập nhật thời gian đăng nhập cuối cùng
+}
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'  
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = '....'  
+EMAIL_HOST_PASSWORD = '...'
