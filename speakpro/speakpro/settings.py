@@ -11,7 +11,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
-
+from os import path
+import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -26,9 +27,26 @@ SECRET_KEY = 'django-insecure-i^b1(h79#a5&%h7^zg$=h6_189%%)2r@$+32kvs1&i8r*fc*qm
 DEBUG = True
 
 ALLOWED_HOSTS = []
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:8080',  # URL của React FE
+]
+# settings.py
+# Cài đặt CORS
+# settings.py
 
+import os
+
+# Đường dẫn đến thư mục lưu trữ tệp media (local storage)
+import os
+
+# Cấu hình MEDIA_ROOT để Django có thể truy cập đúng thư mục chứa tệp media
+MEDIA_URL = '/media/'  # URL để truy cập các tệp media từ frontend
+
+# Đảm bảo MEDIA_ROOT trỏ đến đúng thư mục 'media' trong app của bạn
+MEDIA_ROOT = os.path.join(BASE_DIR, 'app', 'media')
 
 # Application definition
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -37,6 +55,11 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    'rest_framework',  # Cài đặt Django REST framework
+    'app',
+    'corsheaders',
+
 ]
 
 MIDDLEWARE = [
@@ -47,7 +70,11 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    
+    'corsheaders.middleware.CorsMiddleware',
 ]
+CORS_ORIGIN_ALLOW_ALL = True  # Or specify origins if you want to restrict
+
 
 ROOT_URLCONF = 'speakpro.urls'
 
@@ -75,8 +102,12 @@ WSGI_APPLICATION = 'speakpro.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'speakpro',  # Tên cơ sở dữ liệu 
+        'USER': 'root',    # Tên người dùng MySQL
+        'PASSWORD': '123456',  # Mật khẩu MySQL
+        'HOST': 'localhost',      # Hoặc IP của máy chủ MySQL nếu không cài đặt trên máy cục bộ
+        'PORT': '3306',           # Cổng MySQL mặc định
     }
 }
 
@@ -121,3 +152,21 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+from dotenv import load_dotenv
+load_dotenv()
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),  # Thời gian sống của access token
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),  # Thời gian sống của refresh token
+    'ROTATE_REFRESH_TOKENS': True,  # Tùy chọn quay lại refresh token sau mỗi yêu cầu
+    'BLACKLIST_AFTER_ROTATION': True,  # Xóa refresh token cũ sau khi quay lại
+    'UPDATE_LAST_LOGIN': True,  # Cập nhật thời gian đăng nhập cuối cùng
+}
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'  
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = '....'  
+EMAIL_HOST_PASSWORD = '...'
