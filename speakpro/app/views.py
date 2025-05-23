@@ -25,6 +25,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate, get_user_model
 from django.core.mail import send_mail
+from rest_framework import generics, permissions
 from .serializers import ResetPasswordSerializer
 from django.core.cache import cache
 import random
@@ -185,6 +186,16 @@ def admin_dashboard(request):
     if is_admin(request.user):
         return Response({'message': 'Welcome Admin!'}, status=status.HTTP_200_OK)
     return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+class UserProfileUpdateAPIView(generics.UpdateAPIView):
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+    def perform_update(self, serializer):
+        serializer.save()
 
 # ==========================================================================================================================================
 # api search

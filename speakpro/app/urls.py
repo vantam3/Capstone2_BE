@@ -3,7 +3,7 @@ from .views import  GenreListView, GenreDetailView, SpeakingTextListView, Speaki
 from .views import (
     RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView,
     ChallengeListAPIView, ChallengeDetailAPIView, StartChallengeAPIView, SubmitExerciseAttemptAPIView, MyChallengeProgressAPIView,
-    LeaderboardAPIView
+    LeaderboardAPIView, UserProfileUpdateAPIView,
     )
 from django.conf import settings
 from django.conf.urls.static import static
@@ -21,6 +21,7 @@ urlpatterns = [
     path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),  # Route cho quên mật khẩu
     path('reset-password/', ResetPasswordView.as_view(), name='reset_password'),  # Route cho đặt lại mật khẩu
     path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
+    path('api/profile/update/', UserProfileUpdateAPIView.as_view(), name='user-profile-update'),
     # Search
     path('speaking-text/search/', SpeakingTextSearchAPIView.as_view(), name='speakingtext-search'),
     # CHALLENGE
