@@ -3,7 +3,7 @@ from .views import  GenreListView, GenreDetailView, SpeakingTextListView, Speaki
 from .views import (
     RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView,
     ChallengeListAPIView, ChallengeDetailAPIView, StartChallengeAPIView, SubmitExerciseAttemptAPIView, MyChallengeProgressAPIView,
-    UserProfileUpdateAPIView, ChallengeLeaderboardAPIView, GlobalLeaderboardAPIView
+    UserProfileUpdateAPIView, ChallengeLeaderboardAPIView, GlobalLeaderboardAPIView, ChallengeExerciseDetailAPIView,
     )
 from django.conf import settings
 from django.conf.urls.static import static
@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/challenges/', ChallengeListAPIView.as_view()),
     path('api/challenges/<int:challenge_pk>/', ChallengeDetailAPIView.as_view()),
     path('api/challenges/<int:challenge_pk>/start/', StartChallengeAPIView.as_view()),
+    path('api/challenges/exercises/<int:pk>/detail/',ChallengeExerciseDetailAPIView.as_view(),name='challenge-exercise-detail'),
     path('api/challenges/exercises/<int:exercise_pk>/submit_attempt/', SubmitExerciseAttemptAPIView.as_view()),
     path('api/me/challenges/progress/', MyChallengeProgressAPIView.as_view()),
     # LEADERBOARD

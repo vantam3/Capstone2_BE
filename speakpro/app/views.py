@@ -70,37 +70,33 @@ class LoginView(APIView):
         username = data.get('username')
         password = data.get('password')
 
-        try:
-            auth_user = authenticate(request, username=username, password=password)
-            if auth_user is None:
-                try:
-                    User.objects.get(username=username)
-                    # User tồn tại nhưng mật khẩu sai
-                    return Response({'message': 'Invalid password!'},
-                                    status=status.HTTP_401_UNAUTHORIZED)
-                except User.DoesNotExist:
-                    # User không tồn tại
-                    return Response({'message': 'User with this username does not exist!'},
-                                    status=status.HTTP_401_UNAUTHORIZED)
+        auth_user = authenticate(request, username=username, password=password)
+
+        if auth_user is not None:
+            # Người dùng xác thực thành công
             today = date.today()
             streak_record, created = UserLoginStreak.objects.get_or_create(user=auth_user)
 
             if created or streak_record.last_login_date is None:
                 streak_record.streak_count = 1
             elif streak_record.last_login_date == today:
-                pass
+                pass # Đã đăng nhập hôm nay
             elif streak_record.last_login_date == (today - timedelta(days=1)):
                 streak_record.streak_count += 1
             else:
                 streak_record.streak_count = 1
-            if streak_record.last_login_date != today :
+            
+            # Chỉ cập nhật last_login_date nếu nó chưa phải là hôm nay
+            # (hoặc khi streak được set/reset)
+            if streak_record.last_login_date != today or created:
                  streak_record.last_login_date = today
-
+            
             streak_record.save()
+
             refresh = RefreshToken.for_user(auth_user)
             user_data = {
                 'id': auth_user.id,
-                'username': auth_user.username, 
+                'username': auth_user.username,
                 'first_name': auth_user.first_name,
                 'last_name': auth_user.last_name,
                 'email': auth_user.email,
@@ -110,10 +106,17 @@ class LoginView(APIView):
                 'token': str(refresh.access_token),
                 'user': user_data
             }, status=status.HTTP_200_OK)
-
-        except User.DoesNotExist: 
-             return Response({'message': 'User with this username does not exist! (Fallback)'}, 
-                            status=status.HTTP_401_UNAUTHORIZED)
+        else:
+            # Xác thực thất bại
+            try:
+                User.objects.get(username=username)
+                # User tồn tại, vậy là sai mật khẩu
+                return Response({'message': 'Invalid password!'},
+                                status=status.HTTP_401_UNAUTHORIZED)
+            except User.DoesNotExist:
+                # User không tồn tại
+                return Response({'message': 'User with this username does not exist!'},
+                                status=status.HTTP_401_UNAUTHORIZED)
 
 class LogoutView(APIView):
     def post(self, request):
@@ -246,7 +249,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .models import Challenge, ChallengeExercise, UserChallengeProgress, UserExerciseAttempt
-from .serializers import ChallengeSerializer, UserChallengeProgressSerializer
+from .serializers import ChallengeSerializer, UserChallengeProgressSerializer, ChallengeExerciseDetailSerializer
 from .utils.score import calculate_score
 from pydub import AudioSegment
 import speech_recognition as sr
@@ -278,6 +281,11 @@ class StartChallengeAPIView(APIView):
             progress.status = 'in_progress'
             progress.save()
         return Response({"message": "Challenge started", "status": progress.status})
+
+class ChallengeExerciseDetailAPIView(generics.RetrieveAPIView):
+    queryset = ChallengeExercise.objects.all()
+    serializer_class = ChallengeExerciseDetailSerializer
+    permission_classes = [permissions.AllowAny]
 
 class SubmitExerciseAttemptAPIView(APIView):
     permission_classes = [IsAuthenticated]
