@@ -103,7 +103,7 @@ WSGI_APPLICATION = 'speakpro.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'speakpro',  # Tên cơ sở dữ liệu 
+        'NAME': 'speaking_db',  # Tên cơ sở dữ liệu 
         'USER': 'root',    # Tên người dùng MySQL
         'PASSWORD': '123456',  # Mật khẩu MySQL
         'HOST': 'localhost',      # Hoặc IP của máy chủ MySQL nếu không cài đặt trên máy cục bộ

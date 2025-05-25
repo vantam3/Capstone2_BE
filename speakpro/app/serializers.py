@@ -28,17 +28,13 @@ class SpeakingTextSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'genre', 'content', 'language', 'level']  # Bao gồm level và content
 
     def get_content(self, obj):
-   
         if obj.content:
             try:
-                # Giải mã từ hex thành binary
-                content_binary = bytes.fromhex(obj.content.decode('utf-8'))  # Chuyển đổi từ hex thành binary
-                
-                # Giải mã nhị phân (binary) thành văn bản (UTF-8)
-                return content_binary.decode('utf-8')  # Chuyển đổi từ binary thành văn bản
+                return obj.content.decode('utf-8')  # GIẢI MÃ trực tiếp BinaryField
             except (UnicodeDecodeError, ValueError):
-                return "Không thể giải mã nội dung, dữ liệu không phải văn bản hợp lệ."  # Trường hợp lỗi nếu không thể giải mã nội dung
-        return "Không có nội dung."  # Trả về chuỗi mặc định nếu không có nội dung
+                return "Không thể giải mã nội dung, dữ liệu không phải văn bản hợp lệ."
+        return "Không có nội dung."
+
 
 
 

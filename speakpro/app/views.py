@@ -688,8 +688,8 @@ class SubmitSpeakingAPIView(APIView):
 
         # Giải mã nội dung gốc
         try:
-            original_bytes = bytes.fromhex(speaking_text.content.decode("utf-8"))
-            original_text = original_bytes.decode("utf-8")
+            original_text = speaking_text.content.decode("utf-8")
+
         except Exception as e:
             return Response({"error": "Không thể giải mã nội dung đoạn văn mẫu."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -849,7 +849,7 @@ class DialogueAPIView(APIView):
             return Response({"error": f"Speech recognition failed: {str(e)}"}, status=500)
 
         # Chọn giọng đọc random
-        tlds = ['com', 'co.uk', 'com.au', 'ca', 'ie', 'co.in']
+        tlds = ['en-US-Wavenet-F', 'en-GB-Wavenet-B', 'com.au', 'ca', 'ie', 'co.in','en-US-Wavenet-D', 'en-GB-Wavenet-A', 'en-AU-Wavenet-B']
         chosen_tld = random.choice(tlds)
 
         # Tạo prompt với style ngẫu nhiên
