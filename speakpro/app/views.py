@@ -500,7 +500,75 @@ class GlobalLeaderboardAPIView(APIView):
         leaderboard = sorted(leaderboard, key=lambda x: x["total_points"], reverse=True)
 
         return Response({"leaderboard": leaderboard})
+# ==========================================================================================================================================
+# API Admin summary
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.contrib.auth.models import User
+from django.db.models import Count
+from django.utils import timezone
+from datetime import timedelta
+from collections import defaultdict
 
+from .models import (
+    SpeakingText,
+    ChallengeExercise,
+    UserAudio,
+    UserExerciseAttempt,
+    UserLoginStreak  # hoặc bảng logins khác nếu có
+)
+
+class AdminDashboardSummaryAPIView(APIView):
+    def get(self, request):
+        now = timezone.now()
+        last_week = now - timedelta(days=7)
+
+        # Tổng người dùng & tăng trưởng
+        total_users = User.objects.count()
+        last_week_users = User.objects.filter(date_joined__gte=last_week).count()
+        user_growth_percent = (last_week_users / (total_users - last_week_users + 1e-6)) * 100
+
+        # Tổng số bài nói
+        total_speaking_contents = ChallengeExercise.objects.count()
+        recent_speaking = ChallengeExercise.objects.filter(created_at__gte=last_week).count()
+        content_growth_percent = (recent_speaking / (total_speaking_contents - recent_speaking + 1e-6)) * 100
+
+        # Tổng số lượt luyện tập
+        total_attempts = UserAudio.objects.count() + UserExerciseAttempt.objects.count()
+        recent_attempts = UserAudio.objects.filter(uploaded_at__gte=last_week).count() + \
+                          UserExerciseAttempt.objects.filter(attempted_at__gte=last_week).count()
+        attempt_growth_percent = (recent_attempts / (total_attempts - recent_attempts + 1e-6)) * 100
+
+        # Thống kê đăng nhập mỗi ngày trong tuần
+        login_data = UserLoginStreak.objects.filter(last_login_date__gte=now - timedelta(days=6))
+        daily_login_chart = defaultdict(int)
+        for item in login_data:
+            weekday = item.last_login_date.strftime('%a')  # Mon, Tue,...
+            daily_login_chart[weekday] += 1
+
+        day_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        login_chart_data = [{"day": d, "users": daily_login_chart.get(d, 0)} for d in day_order]
+
+        # Most practiced content
+        practice_count = UserExerciseAttempt.objects.values("challenge_exercise__title").annotate(
+        count=Count("id")).order_by("-count")[:5]
+
+        most_practiced = [
+            {"name": item["challenge_exercise__title"], "count": item["count"]}
+            for item in practice_count
+        ]
+        most_practiced = sorted(most_practiced, key=lambda x: x["count"], reverse=True)[:5]
+
+        return Response({
+            "total_users": total_users,
+            "user_growth_percent": round(user_growth_percent),
+            "total_speaking_contents": total_speaking_contents,
+            "content_growth_percent": round(content_growth_percent),
+            "total_practice_attempts": total_attempts,
+            "attempt_growth_percent": round(attempt_growth_percent),
+            "daily_login_chart": login_chart_data,
+            "most_practiced_content": most_practiced
+        })
 # ==========================================================================================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):
