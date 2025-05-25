@@ -25,6 +25,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate, get_user_model
 from django.core.mail import send_mail
+from datetime import date, timedelta
+from .models import UserLoginStreak
 from rest_framework import generics, permissions
 from .serializers import ResetPasswordSerializer
 from django.core.cache import cache
@@ -69,31 +71,48 @@ class LoginView(APIView):
         password = data.get('password')
 
         try:
-            # Find user by username
-            user = User.objects.get(username=username)
-
-            # Authenticate user with username and password
-            auth_user = authenticate(request, username=user.username, password=password)
-
+            auth_user = authenticate(request, username=username, password=password)
             if auth_user is None:
-                return Response({'message': 'Invalid password!'},
-                                status=status.HTTP_401_UNAUTHORIZED)
+                try:
+                    User.objects.get(username=username)
+                    # User tồn tại nhưng mật khẩu sai
+                    return Response({'message': 'Invalid password!'},
+                                    status=status.HTTP_401_UNAUTHORIZED)
+                except User.DoesNotExist:
+                    # User không tồn tại
+                    return Response({'message': 'User with this username does not exist!'},
+                                    status=status.HTTP_401_UNAUTHORIZED)
+            today = date.today()
+            streak_record, created = UserLoginStreak.objects.get_or_create(user=auth_user)
 
-            # Generate token
+            if created or streak_record.last_login_date is None:
+                streak_record.streak_count = 1
+            elif streak_record.last_login_date == today:
+                pass
+            elif streak_record.last_login_date == (today - timedelta(days=1)):
+                streak_record.streak_count += 1
+            else:
+                streak_record.streak_count = 1
+            if streak_record.last_login_date != today :
+                 streak_record.last_login_date = today
+
+            streak_record.save()
             refresh = RefreshToken.for_user(auth_user)
+            user_data = {
+                'id': auth_user.id,
+                'username': auth_user.username, 
+                'first_name': auth_user.first_name,
+                'last_name': auth_user.last_name,
+                'email': auth_user.email,
+                'is_superuser': auth_user.is_superuser,
+            }
             return Response({
                 'token': str(refresh.access_token),
-                'user': {
-                    'id': auth_user.id,
-                    'first_name': auth_user.first_name,
-                    'last_name': auth_user.last_name,
-                    'email': auth_user.email,
-                    'is_superuser': auth_user.is_superuser,
-                }
+                'user': user_data
             }, status=status.HTTP_200_OK)
 
-        except User.DoesNotExist:
-            return Response({'message': 'User with this username does not exist!'},
+        except User.DoesNotExist: 
+             return Response({'message': 'User with this username does not exist! (Fallback)'}, 
                             status=status.HTTP_401_UNAUTHORIZED)
 
 class LogoutView(APIView):
@@ -363,68 +382,111 @@ class MyChallengeProgressAPIView(APIView):
         return Response(serializer.data)
 # ==========================================================================================================================================
 # API leaderboard
-from .models import UserWeeklyScore, UserLoginStreak
+from .models import UserWeeklyScore, UserExerciseAttempt, UserLoginStreak
 from django.db.models import Sum
-class LeaderboardAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+from rest_framework.permissions import IsAuthenticatedOrReadOnly
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.db.models import Max, F, Sum
+from django.contrib.auth.models import User
+from datetime import timedelta
+from django.utils import timezone
+from collections import defaultdict
 
-    def get(self, request):
-        period = request.query_params.get('period', 'Weekly')  # Weekly, Monthly, AllTime
-        today = timezone.now().date()
+class ChallengeLeaderboardAPIView(APIView):
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
-        if period == 'Weekly':
-            # Get current ISO week and year
-            year, week, _ = today.isocalendar()
-            scores = UserWeeklyScore.objects.filter(year=year, week=week).order_by('-total_score').select_related('user')
-            leaderboard = [{"user_id": s.user.id, "username": s.user.username, "score": s.total_score} for s in scores[:10]]
-
-        elif period == 'Monthly':
-            first_day_month = today.replace(day=1)
-            # Sum all scores of the month     
-            scores = UserWeeklyScore.objects.filter(
-                year=today.year,
-                week__gte=first_day_month.isocalendar()[1],
-                week__lte=today.isocalendar()[1]
-            ).values('user').annotate(total=Sum('total_score')).order_by('-total')
-            user_ids = [s['user'] for s in scores[:10]]
-            users = User.objects.filter(id__in=user_ids)
-            leaderboard = []
-            for s in scores[:10]:
-                user = next((u for u in users if u.id == s['user']), None)
-                if user:
-                    leaderboard.append({"user_id": user.id, "username": user.username, "score": s['total']})
-
-        else:  # All Time
-            users = User.objects.annotate(total_score=Sum('userchallengeprogress__score')).order_by('-total_score')
-            leaderboard = [{"user_id": u.id, "username": u.username, "score": u.total_score or 0} for u in users[:10]]
-
-        # Lấy streak và trend của user hiện tại
-        streak = 0
-        trend = 0
-
+    def get(self, request, challenge_id):
         try:
-            user_streak = UserLoginStreak.objects.get(user=request.user)
-            streak = user_streak.streak_count
-        except UserLoginStreak.DoesNotExist:
-            streak = 0
+            challenge = Challenge.objects.get(id=challenge_id)
+        except Challenge.DoesNotExist:
+            return Response({"error": "Challenge not found."}, status=404)
 
-        # Trend: so sánh điểm tuần này và tuần trước
-        year, week, _ = today.isocalendar()
-        this_week_score = UserWeeklyScore.objects.filter(user=request.user, year=year, week=week).aggregate(Sum('total_score'))['total_score__sum'] or 0
-        last_week = week - 1 if week > 1 else 52
-        last_week_year = year if week > 1 else year - 1
-        last_week_score = UserWeeklyScore.objects.filter(user=request.user, year=last_week_year, week=last_week).aggregate(Sum('total_score'))['total_score__sum'] or 0
+        # Lấy danh sách exercise thuộc challenge này
+        exercises = ChallengeExercise.objects.filter(challenge=challenge)
 
-        if last_week_score == 0:
-            trend = 100 if this_week_score > 0 else 0
-        else:
-            trend = ((this_week_score - last_week_score) / last_week_score) * 100
+        # Lấy tất cả các attempt liên quan
+        attempts = UserExerciseAttempt.objects.filter(challenge_exercise__in=exercises)
 
-        return Response({
-            "leaderboard": leaderboard,
-            "user_streak": streak,
-            "user_trend_percent": round(trend, 2),
-        })
+        # Tạo dict {(user_id, exercise_id): max_score}
+        from collections import defaultdict
+        user_scores = defaultdict(lambda: defaultdict(float))
+
+        for attempt in attempts:
+            user_id = attempt.user_challenge_progress.user.id
+            exercise_id = attempt.challenge_exercise.id
+            current_score = float(attempt.score)
+
+            if user_scores[user_id][exercise_id] < current_score:
+                user_scores[user_id][exercise_id] = current_score
+
+        # Tính tổng điểm mỗi user
+        leaderboard = []
+        for user_id, exercise_scores in user_scores.items():
+            total = sum(exercise_scores.values())
+            try:
+                user = User.objects.get(id=user_id)
+                leaderboard.append({
+                    "user_id": user.id,
+                    "username": user.username,
+                    "score": round(total)
+                })
+            except User.DoesNotExist:
+                continue
+
+        # Sắp xếp giảm dần theo điểm
+        leaderboard = sorted(leaderboard, key=lambda x: x['score'], reverse=True)
+
+        return Response({"challenge_id": challenge_id, "leaderboard": leaderboard})
+
+class GlobalLeaderboardAPIView(APIView):
+    def get(self, request):
+        now = timezone.now()
+        one_week_ago = now - timedelta(days=7)
+
+        # Tính điểm cao nhất mỗi bài / người dùng
+        attempts = UserExerciseAttempt.objects.all()
+        current_scores = defaultdict(lambda: defaultdict(float))
+        weekly_scores = defaultdict(float)
+
+        for attempt in attempts:
+            uid = attempt.user_challenge_progress.user.id
+            eid = attempt.challenge_exercise.id
+            score = float(attempt.score)
+            ts = attempt.attempted_at
+
+            if current_scores[uid][eid] < score:
+                current_scores[uid][eid] = score
+            if ts >= one_week_ago:
+                if weekly_scores[uid] < score:
+                    weekly_scores[uid] += score
+
+        # Tổng điểm theo người dùng
+        leaderboard = []
+        for uid, exercise_scores in current_scores.items():
+            try:
+                user = User.objects.get(id=uid)
+                total_score = sum(exercise_scores.values())
+                streak_data = UserLoginStreak.objects.filter(user=user).aggregate(max_streak=Max("streak_count")) or {}
+                max_streak = streak_data.get("max_streak") or 0
+
+                weekly_total = weekly_scores.get(uid, 0.0)
+                last_week_total = total_score - weekly_total
+                growth_percent = ((weekly_total / last_week_total) * 100) if last_week_total > 0 else 0
+
+                leaderboard.append({
+                    "user_id": uid,
+                    "username": user.username,
+                    "total_points": round(total_score),
+                    "longest_streak": max_streak,
+                    "trend": f"{round(growth_percent)}%"
+                })
+            except User.DoesNotExist:
+                continue
+
+        leaderboard = sorted(leaderboard, key=lambda x: x["total_points"], reverse=True)
+
+        return Response({"leaderboard": leaderboard})
 
 # ==========================================================================================================================================
 # API để lấy danh sách tất cả thể loại
