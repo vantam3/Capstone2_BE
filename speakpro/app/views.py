@@ -723,64 +723,192 @@ class LevelListAPIView(generics.ListAPIView):
     
 
 ##################################################### AI #######################################################
-from .utils.mistral_api import ask_mistral
+#@ ✅ UPDATED BACKEND: views.py - DialogueAPIView
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from django.core.files.storage import default_storage
+import os, time, json, re, random
+from pydub import AudioSegment
+import speech_recognition as sr
 from gtts import gTTS
-import time
 from django.conf import settings
+from .utils.mistral_api import ask_mistral
 
 class DialogueAPIView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
         audio_file = request.FILES.get("audio_file")
-        print("[✔] Nhận file:", audio_file.name, audio_file.size)
-
         if not audio_file:
             return Response({"error": "Missing audio file."}, status=400)
 
-        # [1] Lưu file tạm
-        temp_path = default_storage.save('temp_input.webm', audio_file)
-        full_path = os.path.join(default_storage.location, temp_path)
+        try:
+            # Save and convert audio
+            temp_path = default_storage.save('temp_input.webm', audio_file)
+            full_path = os.path.join(default_storage.location, temp_path)
+            wav_path = full_path.replace('.webm', '.wav')
 
-        # [2] Chuyển sang WAV
-        wav_path = full_path.replace('.webm', '.wav')
-        sound = AudioSegment.from_file(full_path, format="webm")
-        sound.export(wav_path, format="wav")
+            sound = AudioSegment.from_file(full_path, format="webm")
+            sound.export(wav_path, format="wav")
 
-        # [3] Nhận dạng giọng nói
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_path) as source:
-            audio_data = recognizer.record(source)
-            try:
-                user_text = recognizer.recognize_google(audio_data, language="en-US")
-                print("[✔] Văn bản nhận được:", user_text)
-            except sr.UnknownValueError:
-                return Response({"error": "Không thể nhận diện giọng nói"}, status=400)
-            except sr.RequestError:
-                return Response({"error": "Lỗi kết nối Google Speech API"}, status=500)
+            # Recognize topic
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(wav_path) as source:
+                audio_data = recognizer.record(source)
+                topic = recognizer.recognize_google(audio_data, language="en-US")
 
+        except Exception as e:
+            return Response({"error": f"Speech recognition failed: {str(e)}"}, status=500)
 
-        # [4] Gửi văn bản lên Mistral AI
-        ai_text = ask_mistral(user_text)
+        # Chọn giọng đọc random
+        tlds = ['com', 'co.uk', 'com.au', 'ca', 'ie', 'co.in']
+        chosen_tld = random.choice(tlds)
 
-        # [5] TTS: chuyển text thành audio
-        tts = gTTS(ai_text)
+        # Tạo prompt với style ngẫu nhiên
+        variations = [
+            "Make the conversation friendly and casual, as if between two close friends.",
+            "Make the conversation like an interview where one person is curious and asks many questions.",
+            "Make the dialogue playful and light-hearted with some humor.",
+            "Make the conversation educational, where one person explains ideas to the other.",
+            "Make the dialogue suitable for English beginners using simple vocabulary and short sentences.",
+            "Include some cultural or real-world references related to the topic.",
+            "Make the dialogue as if they are planning something together related to the topic.",
+            "Make the conversation natural like a real-life situation people encounter every day.",
+            "Create a dialogue where the two people share different opinions or perspectives.",
+            "Make the dialogue slightly dramatic or emotional, while still being realistic."
+        ]
+        variation = random.choice(variations)
 
-        # Tạo thư mục con ai_responses trong MEDIA_ROOT
+        prompt = f"""
+        Create a multi-turn dialogue (about 6 to 8 exchanges total) between two speakers (AI and You) about the topic '{topic}'.
+        The dialogue should:
+        - Start with a natural greeting or question from AI.
+        - Include a mix of statements and questions from both speakers.
+        - Be around 6 to 8 turns total (3 to 4 turns per speaker).
+        - End with a natural conclusion or final comment from AI.
+
+        {variation}
+
+        Format:
+        AI: ...
+        You: ...
+        ...
+        """
+
+        try:
+            raw_text = ask_mistral(prompt)
+            match = re.search(r"(AI:.*?)$", raw_text, re.DOTALL)
+            if not match:
+                return Response({"error": "No valid dialogue found"}, status=500)
+        except Exception as e:
+            return Response({"error": f"AI failed: {str(e)}"}, status=500)
+
+        dialogue_lines = match.group(1).split("\n")
+        steps = []
         output_dir = os.path.join(settings.MEDIA_ROOT, "ai_responses")
         os.makedirs(output_dir, exist_ok=True)
 
-        # Đặt tên file theo timestamp để tránh bị ghi đè
-        filename = f"response_{int(time.time())}.mp3"
-        output_path = os.path.join(output_dir, filename)
+        for i, line in enumerate(dialogue_lines):
+            if ":" not in line:
+                continue
+            speaker, text = line.split(":", 1)
+            speaker, text = speaker.strip(), text.strip()
+            step = {"speaker": speaker, "text": text}
 
-        # Lưu file đúng chỗ
-        tts.save(output_path)
+            if speaker == "AI":
+                try:
+                    tts = gTTS(text=text, lang="en", tld=chosen_tld)
+                    filename = f"ai_{int(time.time())}_{i}.mp3"
+                    path = os.path.join(output_dir, filename)
+                    tts.save(path)
+                    url = request.build_absolute_uri(f"/media/ai_responses/{filename}")
+                    step["audio_url"] = url
+                except Exception as tts_error:
+                    print(f"[❌ TTS ERROR] at line {i}: {tts_error}")
+                    step["audio_url"] = None  # fallback để không lỗi
 
-        # Tạo URL trả về
-        audio_url = request.build_absolute_uri(f"/media/ai_responses/{filename}")
+            steps.append(step)
 
-        # [6] Trả kết quả
+        # Cleanup
+        os.remove(full_path)
+        os.remove(wav_path)
+
+        return Response({
+            "topic": topic,
+            "steps": steps
+        }, status=200)
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from django.core.files.storage import default_storage
+import os
+from pydub import AudioSegment
+import speech_recognition as sr
+from difflib import SequenceMatcher
+
+
+class SubmitReplyAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        audio_file = request.FILES.get("audio_file")
+        expected_text = request.data.get("expected_text")
+
+        if not audio_file or not expected_text:
+            return Response({"error": "Missing data"}, status=400)
+
+        # Save and convert audio
+        temp_path = default_storage.save("temp_reply.webm", audio_file)
+        full_path = os.path.join(default_storage.location, temp_path)
+        wav_path = full_path.replace(".webm", ".wav")
+
+        sound = AudioSegment.from_file(full_path, format="webm")
+        sound.export(wav_path, format="wav")
+
+        recognizer = sr.Recognizer()
+        try:
+            with sr.AudioFile(wav_path) as source:
+                audio_data = recognizer.record(source)
+                user_text = recognizer.recognize_google(audio_data, language="en-US")
+        except Exception:
+            return Response({"error": "Speech recognition failed"}, status=500)
+        finally:
+            os.remove(full_path)
+            os.remove(wav_path)
+
+        # Compare words
+        expected_words = expected_text.lower().split()
+        user_words = user_text.lower().split()
+
+        matcher = SequenceMatcher(None, expected_words, user_words)
+        word_states = []
+        errors = []
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                for idx in range(i1, i2):
+                    word_states.append({"word": expected_words[idx], "correct": True})
+            else:
+                for idx in range(i1, i2):
+                    word_states.append({"word": expected_words[idx], "correct": False})
+                    errors.append({
+                        "text": expected_words[idx],
+                        "errorDescription": f"Incorrect pronunciation or missing word: '{expected_words[idx]}'",
+                        "suggestion": f"Try saying '{expected_words[idx]}' more clearly."
+                    })
+
         return Response({
             "user_text": user_text,
-            "ai_text": ai_text,
-            "ai_audio_url": request.build_absolute_uri(f"/media/ai_responses/{filename}")
-        }, status=200)
+            "expected_text": expected_text,
+            "words": word_states,
+            "errors": errors
+        })
+
+
+
+
+
+
