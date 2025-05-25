@@ -109,40 +109,17 @@ class ChallengeExerciseDetailSerializer(serializers.ModelSerializer):
             'updated_at'
         ]
 
-    def get_speaking_text_content(self, obj: ChallengeExercise) -> str | None:
-        raw_content_data = obj.speaking_text_content
-
-        if raw_content_data:
+    def get_speaking_text_content(self, obj):
+        if obj.speaking_text_content:
             try:
-                if isinstance(raw_content_data, memoryview):
-                    hex_string = raw_content_data.tobytes().decode('utf-8', errors='replace')
-                elif isinstance(raw_content_data, bytes):
-                    hex_string = raw_content_data.decode('utf-8', errors='replace')
-                elif isinstance(raw_content_data, str): # Trường hợp nó đã là chuỗi rồi (ít xảy ra với BinaryField)
-                    hex_string = raw_content_data
-                else:
-                    print(f"ChallengeExercise {obj.id}: Unexpected type for speaking_text_content - {type(raw_content_data)}")
-                    return "Lỗi định dạng: Kiểu dữ liệu không mong muốn."
-
-                if not hex_string.strip():
-                    return "Không có nội dung."
-
-                # Bước 2: Giải mã từ chuỗi hex thành binary (bytes)
-                # Ví dụ: '48656c6c6f' -> b'Hello'
-                content_binary = bytes.fromhex(hex_string)
-                
-                # Bước 3: Giải mã nhị phân (bytes) thành văn bản (UTF-8)
-                # Ví dụ: b'Hello' -> 'Hello'
-                return content_binary.decode('utf-8', errors='replace')
-            
-            except (UnicodeDecodeError, ValueError, TypeError) as e:
-                # Ghi log lỗi chi tiết ở backend để dễ debug
-                error_message = f"Lỗi giải mã speaking_text_content cho exercise ID {obj.id} (Title: '{obj.title}'): {str(e)}. Dữ liệu hex (nếu có): '{hex_string if 'hex_string' in locals() else 'N/A'}'"
-                print(error_message)
+                hex_string_representation = obj.speaking_text_content.decode('utf-8')
+                actual_binary_data = bytes.fromhex(hex_string_representation)
+                return actual_binary_data.decode('utf-8')
+            except (UnicodeDecodeError, ValueError, AttributeError) as e:
+                print(f"Error decoding speaking_text_content for exercise ID {obj.id} (Title: '{obj.title}'): {str(e)}")
                 return "Không thể giải mã nội dung, dữ liệu không phải văn bản hợp lệ."
-        
         return "Không có nội dung."
-    
+
 class ChallengeSerializer(serializers.ModelSerializer):
     exercises = ChallengeExerciseSerializer(many=True, read_only=True)
     days_left = serializers.SerializerMethodField()

@@ -271,6 +271,11 @@ class ChallengeDetailAPIView(APIView):
         serializer = ChallengeSerializer(challenge)
         return Response(serializer.data)
 
+class ChallengeExerciseDetailAPIView(generics.RetrieveAPIView):
+    queryset = ChallengeExercise.objects.all()
+    serializer_class = ChallengeExerciseDetailSerializer
+    permission_classes = [permissions.AllowAny] 
+
 class StartChallengeAPIView(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request, challenge_pk):

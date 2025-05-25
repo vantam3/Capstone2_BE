@@ -28,7 +28,7 @@ urlpatterns = [
     path('api/challenges/', ChallengeListAPIView.as_view()),
     path('api/challenges/<int:challenge_pk>/', ChallengeDetailAPIView.as_view()),
     path('api/challenges/<int:challenge_pk>/start/', StartChallengeAPIView.as_view()),
-    path('api/challenges/exercises/<int:pk>/detail/',ChallengeExerciseDetailAPIView.as_view(),name='challenge-exercise-detail'),
+    path('api/challenges/exercises/<int:pk>/detail/',ChallengeExerciseDetailAPIView.as_view()),
     path('api/challenges/exercises/<int:exercise_pk>/submit_attempt/', SubmitExerciseAttemptAPIView.as_view()),
     path('api/me/challenges/progress/', MyChallengeProgressAPIView.as_view()),
     # LEADERBOARD
