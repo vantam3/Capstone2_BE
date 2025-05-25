@@ -92,6 +92,34 @@ class ChallengeExerciseSerializer(serializers.ModelSerializer):
         model = ChallengeExercise
         fields = ['id', 'title', 'description', 'order']
 
+class ChallengeExerciseDetailSerializer(serializers.ModelSerializer):
+    speaking_text_content = serializers.SerializerMethodField()
+    challenge_id = serializers.IntegerField(source='challenge.id', read_only=True)
+
+    class Meta:
+        model = ChallengeExercise
+        fields = [
+            'id',
+            'title',
+            'description',
+            'order',
+            'speaking_text_content',
+            'challenge_id',
+            'created_at',
+            'updated_at'
+        ]
+
+    def get_speaking_text_content(self, obj):
+        if obj.speaking_text_content:
+            try:
+                hex_string_representation = obj.speaking_text_content.decode('utf-8')
+                actual_binary_data = bytes.fromhex(hex_string_representation)
+                return actual_binary_data.decode('utf-8')
+            except (UnicodeDecodeError, ValueError, AttributeError) as e:
+                print(f"Error decoding speaking_text_content for exercise ID {obj.id} (Title: '{obj.title}'): {str(e)}")
+                return "Không thể giải mã nội dung, dữ liệu không phải văn bản hợp lệ."
+        return "Không có nội dung."
+
 class ChallengeSerializer(serializers.ModelSerializer):
     exercises = ChallengeExerciseSerializer(many=True, read_only=True)
     days_left = serializers.SerializerMethodField()
