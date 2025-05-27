@@ -570,6 +570,218 @@ class AdminDashboardSummaryAPIView(APIView):
             "most_practiced_content": most_practiced
         })
 # ==========================================================================================================================================
+# API Report
+from django.utils import timezone
+from datetime import timedelta, datetime
+from django.db.models import Count, Avg
+from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
+from collections import defaultdict
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.contrib.auth.models import User
+from .models import (
+    SpeakingText,
+    ChallengeExercise,
+    UserExerciseAttempt,
+    UserLoginStreak,
+    Genre,
+    SpeakingResult,
+    UserChallengeProgress
+)
+
+class AdminReportsDataAPIView(APIView):
+
+    def _get_date_range(self, period_str):
+        now = timezone.now()
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999) # Cuối ngày hiện tại
+        
+        if period_str == 'day': # Today
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period_str == 'week': # This Week (tính từ Thứ Hai của tuần hiện tại)
+            start_date = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period_str == 'month': # This Month
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else: # Mặc định là 'This Week' nếu period_str không hợp lệ
+            start_date = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            period_str = 'week' # Cập nhật lại period_str để response được chính xác
+        
+        return start_date, end_date, period_str
+
+    def _get_time_unit_accessor(self, granularity_str):
+        # Mặc định là 'day' nếu granularity_str không hợp lệ hoặc không được cung cấp
+        if granularity_str == 'month':
+            return TruncMonth, "%Y-%m"
+        elif granularity_str == 'week':
+            # TruncWeek trả về Thứ Hai của tuần. %W (00-53, Thứ Hai là ngày đầu tuần)
+            return TruncWeek, "%Y-W%W" 
+        return TruncDay, "%Y-%m-%d" # Mặc định là 'day'
+
+    def get_user_activity_preview_data(self, start_date, end_date, trunc_func, date_format_str):
+        # Logins
+        logins_q = (UserLoginStreak.objects
+                    .filter(last_login_date__range=(start_date.date(), end_date.date()))
+                    .annotate(period_unit=trunc_func('last_login_date'))
+                    .values('period_unit')
+                    .annotate(count=Count('user', distinct=True))
+                    .order_by('period_unit'))
+        
+        # Exercises Completed
+        completed_q = (UserChallengeProgress.objects
+                       .filter(status='completed', completed_date__range=(start_date, end_date))
+                       .annotate(period_unit=trunc_func('completed_date'))
+                       .values('period_unit')
+                       .annotate(count=Count('id'))
+                       .order_by('period_unit'))
+
+        # Practice Attempts
+        challenge_attempts_q = (UserExerciseAttempt.objects
+                                .filter(attempted_at__range=(start_date, end_date))
+                                .annotate(period_unit=trunc_func('attempted_at'))
+                                .values('period_unit')
+                                .annotate(count=Count('id'))
+                                .order_by('period_unit'))
+        
+        general_practice_q = (SpeakingResult.objects
+                              .filter(timestamp__range=(start_date, end_date))
+                              .annotate(period_unit=trunc_func('timestamp'))
+                              .values('period_unit')
+                              .annotate(count=Count('id'))
+                              .order_by('period_unit'))
+
+        # Gộp dữ liệu: Tạo một tập hợp tất cả các 'period_unit' từ các query
+        all_periods = set()
+        for q_set in [logins_q, completed_q, challenge_attempts_q, general_practice_q]:
+            for item in q_set:
+                all_periods.add(item['period_unit'])
+        
+        sorted_periods = sorted(list(all_periods))
+        
+        results = []
+        for period_dt_obj in sorted_periods:
+            period_key_str = period_dt_obj.strftime(date_format_str)
+            
+            logins_count = next((item['count'] for item in logins_q if item['period_unit'] == period_dt_obj), 0)
+            completed_count = next((item['count'] for item in completed_q if item['period_unit'] == period_dt_obj), 0)
+            challenge_attempt_count = next((item['count'] for item in challenge_attempts_q if item['period_unit'] == period_dt_obj), 0)
+            general_practice_count = next((item['count'] for item in general_practice_q if item['period_unit'] == period_dt_obj), 0)
+            total_attempts = challenge_attempt_count + general_practice_count
+
+            results.append({
+                "name": period_key_str,
+                "logins": logins_count,
+                "exercisesCompleted": completed_count,
+                "practiceAttempts": total_attempts 
+            })
+        return results
+
+    def get_content_engagement_preview_data(self, start_date, end_date):
+        genres = Genre.objects.all()
+        results = []
+        for genre in genres:
+            speaking_texts_in_genre = SpeakingText.objects.filter(genre=genre)
+            attempts_count = SpeakingResult.objects.filter(
+                speaking_text__in=speaking_texts_in_genre,
+                timestamp__range=(start_date, end_date)
+            ).count()
+            
+            avg_score_data = SpeakingResult.objects.filter(
+                speaking_text__in=speaking_texts_in_genre,
+                timestamp__range=(start_date, end_date)
+            ).aggregate(avg=Avg('score'))
+            average_score = round(avg_score_data['avg'], 1) if avg_score_data['avg'] else 0
+            
+            if attempts_count > 0 or average_score > 0: 
+                results.append({
+                    "name": genre.name,
+                    "attempts": attempts_count,
+                    "averageScore": average_score
+                })
+        return results
+
+    def get_user_growth_preview_data(self, start_date, end_date, trunc_func, date_format_str):
+        user_growth = (User.objects
+                       .filter(date_joined__range=(start_date, end_date))
+                       .annotate(period_unit=trunc_func('date_joined'))
+                       .values('period_unit')
+                       .annotate(new_users=Count('id'))
+                       .order_by('period_unit'))
+        
+        results = [{"name": item['period_unit'].strftime(date_format_str), "users": item['new_users']} for item in user_growth]
+        return results
+        
+
+    def get_learning_performance_preview_data(self, start_date, end_date, trunc_func, date_format_str):
+        # Tính điểm trung bình từ UserExerciseAttempt và SpeakingResult gộp lại
+        
+        all_scores_data = []
+        challenge_scores = UserExerciseAttempt.objects.filter(attempted_at__range=(start_date, end_date)).values_list('attempted_at', 'score')
+        general_scores = SpeakingResult.objects.filter(timestamp__range=(start_date, end_date)).values_list('timestamp', 'score')
+
+        for timestamp, score in challenge_scores:
+            all_scores_data.append({'timestamp': timestamp, 'score': float(score)}) # score của UserExerciseAttempt là FloatField
+        for timestamp, score in general_scores:
+            all_scores_data.append({'timestamp': timestamp, 'score': float(score)}) # score của SpeakingResult là DecimalField
+
+        # Nhóm theo period_unit và tính trung bình
+        grouped_scores = defaultdict(lambda: {'total_score': 0.0, 'count': 0})
+        for record in all_scores_data:
+            period_key = trunc_func(record['timestamp']).strftime(date_format_str)
+            grouped_scores[period_key]['total_score'] += record['score']
+            grouped_scores[period_key]['count'] += 1
+        
+        results = []
+        sorted_grouped_scores = sorted(grouped_scores.items(), key=lambda x: x[0]) # Sắp xếp theo chuỗi thời gian
+        for period_str_key, data in sorted_grouped_scores:
+            avg_score = round(data['total_score'] / data['count'], 1) if data['count'] > 0 else 0
+            results.append({
+                "name": period_str_key,
+                "score": avg_score
+            })
+        return results
+
+    def get_system_usage_preview_data(self, start_date, end_date):
+        return {
+            "message": "Dữ liệu sử dụng hệ thống chi tiết (tải server, thời gian phản hồi API, tỷ lệ lỗi) hiện không được theo dõi trong phạm vi các model ứng dụng. Để có báo cáo này, cần các công cụ giám sát và logging chuyên dụng."
+        }
+
+    def get(self, request, *args, **kwargs):
+        report_type_param = request.query_params.get('reportType', 'userActivity')
+        time_range_param = request.query_params.get('timeRange', 'week') # Giá trị từ Select của FE
+        # 'Data Grouping' từ FE sẽ quyết định granularity
+        granularity_param = request.query_params.get('granularity', 'day') 
+
+        start_date, end_date, actual_time_range_param = self._get_date_range(time_range_param)
+        trunc_func, date_format_str = self._get_time_unit_accessor(granularity_param)
+        
+        preview_data = {}
+        if report_type_param == 'userActivity':
+            preview_data = self.get_user_activity_preview_data(start_date, end_date, trunc_func, date_format_str)
+        elif report_type_param == 'contentEngagement':
+            preview_data = self.get_content_engagement_preview_data(start_date, end_date)
+        elif report_type_param == 'userGrowth':
+            preview_data = self.get_user_growth_preview_data(start_date, end_date, trunc_func, date_format_str)
+        elif report_type_param == 'performance':
+            preview_data = self.get_learning_performance_preview_data(start_date, end_date, trunc_func, date_format_str)
+        elif report_type_param == 'systemUsage':
+            preview_data = self.get_system_usage_preview_data(start_date, end_date)
+        else:
+            return Response({"error": f"Loại báo cáo '{report_type_param}' không được hỗ trợ."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        return Response({
+            "report_type": report_type_param,
+            "time_range_requested": time_range_param, # Giá trị FE gửi lên
+            "granularity_requested": granularity_param,
+            "data_period_applied": { # Khoảng thời gian thực tế được áp dụng
+                "start": start_date.strftime('%Y-%m-%d'),
+                "end": end_date.strftime('%Y-%m-%d'),
+                "type": actual_time_range_param # Loại khoảng thời gian thực tế sau khi xử lý
+            },
+            "preview_data": preview_data
+        }, status=status.HTTP_200_OK)
+#     
+# ==========================================================================================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):
     def get(self, request):
