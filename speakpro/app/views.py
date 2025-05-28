@@ -849,7 +849,7 @@ class DialogueAPIView(APIView):
             return Response({"error": f"Speech recognition failed: {str(e)}"}, status=500)
 
         # Chọn giọng đọc random
-        tlds = ['en-US-Wavenet-F', 'en-GB-Wavenet-B', 'com.au', 'ca', 'ie', 'co.in','en-US-Wavenet-D', 'en-GB-Wavenet-A', 'en-AU-Wavenet-B']
+        tlds = ['com.us', 'com', 'com.au', 'ca', 'ie', 'co.in']
         chosen_tld = random.choice(tlds)
 
         # Tạo prompt với style ngẫu nhiên
