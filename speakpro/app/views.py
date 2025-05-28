@@ -241,6 +241,105 @@ class SpeakingTextSearchAPIView(generics.ListAPIView):
             queryset = queryset.filter(title__icontains=title)
 
         return queryset
+    
+class UserActivityHistoryAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        activities = []
+        initial_limit_per_source = 100 
+        final_limit = 50
+
+        # 1. UserLoginStreak
+        login_streaks = UserLoginStreak.objects.filter(user=user).order_by('-last_login_date')[:initial_limit_per_source]
+        for streak in login_streaks:
+            # Chuyển DateField thành DateTimeField (đầu ngày) để sort chung
+            activity_datetime = datetime.combine(streak.last_login_date, time.min)
+            if not timezone.is_aware(activity_datetime):
+                activity_datetime = timezone.make_aware(activity_datetime, timezone.get_default_timezone())
+
+            activities.append({
+                "id": f"login-{streak.id}",
+                "type": "login",
+                "raw_date": activity_datetime, # Để sort
+                "date": activity_datetime.isoformat(), # Chuẩn hóa cho output
+                "title": "Logged In",
+                "details": f"Current streak: {streak.streak_count} day(s)",
+                "score": None,
+                "duration": None
+            })
+
+        # 2. UserChallengeProgress (Interacted and Completed)
+        challenge_progresses = UserChallengeProgress.objects.filter(user=user).select_related('challenge').order_by('-last_attempted_date')[:initial_limit_per_source]
+        
+        for progress in challenge_progresses:
+            interact_date = progress.last_attempted_date
+            if not timezone.is_aware(interact_date):
+                 interact_date = timezone.make_aware(interact_date, timezone.get_default_timezone())
+
+            activities.append({
+                "id": f"progress-interact-{progress.id}",
+                "type": "challenge_interaction",
+                "raw_date": interact_date,
+                "date": interact_date.isoformat(),
+                "title": f"Activity on: {progress.challenge.title}",
+                "details": f"Status: {progress.get_status_display()}. Score: {progress.score if progress.score is not None else 'N/A'}. Completion: {progress.completion_percentage}%",
+                "score": progress.score if progress.score is not None else None,
+                "duration": None
+            })
+
+            if progress.status == 'completed' and progress.completed_date:
+                completed_date_aware = progress.completed_date
+                if not timezone.is_aware(completed_date_aware):
+                    completed_date_aware = timezone.make_aware(completed_date_aware, timezone.get_default_timezone())
+                
+                activities.append({
+                    "id": f"progress-complete-{progress.id}",
+                    "type": "challenge_completed",
+                    "raw_date": completed_date_aware,
+                    "date": completed_date_aware.isoformat(),
+                    "title": f"Completed: {progress.challenge.title}",
+                    "details": f"Final Score: {progress.score}. Completion: {progress.completion_percentage}%",
+                    "score": progress.score,
+                    "duration": None
+                })
+
+        # 3. UserExerciseAttempt
+        exercise_attempts = UserExerciseAttempt.objects.filter(
+            user_challenge_progress__user=user
+        ).select_related(
+            'challenge_exercise', 
+            'user_challenge_progress__challenge'
+        ).order_by('-attempted_at')[:initial_limit_per_source]
+
+        for attempt in exercise_attempts:
+            attempt_date = attempt.attempted_at
+            if not timezone.is_aware(attempt_date):
+                attempt_date = timezone.make_aware(attempt_date, timezone.get_default_timezone())
+            
+            activities.append({
+                "id": f"attempt-{attempt.id}",
+                "type": "exercise_attempt",
+                "raw_date": attempt_date,
+                "date": attempt_date.isoformat(),
+                "title": f"Attempted: {attempt.challenge_exercise.title}",
+                "details": f"Challenge: {attempt.user_challenge_progress.challenge.title}. Your Score: {attempt.score:.0f}. Transcribed: \"{attempt.transcribed_text[:30]}...\"",
+                "score": round(attempt.score),
+                "duration": None 
+            })
+
+        # Sắp xếp tất cả hoạt động theo raw_date giảm dần
+        activities.sort(key=lambda x: x['raw_date'], reverse=True)
+
+        # Giới hạn cuối cùng và loại bỏ raw_date
+        final_activities_payload = []
+        for act in activities[:final_limit]:
+            # Tạo một dict mới không có 'raw_date'
+            payload_item = {k: v for k, v in act.items() if k != 'raw_date'}
+            final_activities_payload.append(payload_item)
+
+        return Response(final_activities_payload, status=status.HTTP_200_OK)
 # ==========================================================================================================================================
 # API Challenge
 from rest_framework.permissions import IsAuthenticated
@@ -287,11 +386,6 @@ class StartChallengeAPIView(APIView):
             progress.save()
         return Response({"message": "Challenge started", "status": progress.status})
 
-class ChallengeExerciseDetailAPIView(generics.RetrieveAPIView):
-    queryset = ChallengeExercise.objects.all()
-    serializer_class = ChallengeExerciseDetailSerializer
-    permission_classes = [permissions.AllowAny]
-
 class SubmitExerciseAttemptAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
@@ -300,42 +394,53 @@ class SubmitExerciseAttemptAPIView(APIView):
         today = timezone.now().date()
         year, week, _ = today.isocalendar()
         obj, created = UserWeeklyScore.objects.get_or_create(user=user, year=year, week=week)
-        obj.total_score += score
+        obj.total_score += score # Giả sử score ở đây là điểm của bài tập vừa nộp
         obj.save()
 
     def update_user_streak(self, user):
         today = timezone.now().date()
         streak, created = UserLoginStreak.objects.get_or_create(user=user)
 
-        if streak.last_login_date is None:
+        if streak.last_login_date is None: # Người dùng chưa đăng nhập bao giờ hoặc streak đã bị reset
             streak.streak_count = 1
         else:
             delta = (today - streak.last_login_date).days
-            if delta == 1:
+            if delta == 1: # Đăng nhập ngày liên tiếp
                 streak.streak_count += 1
-            elif delta > 1:
-                streak.streak_count = 1  # reset nếu gián đoạn
-
-        streak.last_login_date = today
+            elif delta > 1: # Bỏ lỡ ngày, reset streak
+                streak.streak_count = 1
+            # Nếu delta == 0 (đăng nhập nhiều lần trong ngày), không thay đổi streak_count
+        
+        # Chỉ cập nhật last_login_date nếu nó chưa phải là hôm nay hoặc khi streak được set/reset
+        if streak.last_login_date != today or delta != 0 : # delta != 0 để bao gồm cả trường hợp streak_count = 1
+            streak.last_login_date = today
+        
         streak.save()
 
     def post(self, request, exercise_pk):
         user = request.user
         audio_file = request.FILES.get('audio_file')
         if not audio_file:
-            return Response({"error": "Missing audio file"}, status=400)
+            return Response({"error": "Missing audio file"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             exercise = ChallengeExercise.objects.get(pk=exercise_pk)
         except ChallengeExercise.DoesNotExist:
-            return Response({"error": "Exercise not found"}, status=404)
+            return Response({"error": "Exercise not found"}, status=status.HTTP_404_NOT_FOUND)
 
         # [1] Chuyển đổi WebM -> WAV
         temp_path = default_storage.save('temp_challenge_input.webm', audio_file)
         full_path = os.path.join(default_storage.location, temp_path)
         wav_path = full_path.replace('.webm', '.wav')
-        sound = AudioSegment.from_file(full_path, format="webm")
-        sound.export(wav_path, format="wav")
+        try:
+            sound = AudioSegment.from_file(full_path, format="webm")
+            sound.export(wav_path, format="wav")
+        except Exception as e:
+            # Dọn dẹp file tạm nếu có lỗi chuyển đổi
+            if os.path.exists(full_path):
+                os.remove(full_path)
+            return Response({"error": f"Audio conversion failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
         # [2] Nhận diện giọng nói
         recognizer = sr.Recognizer()
@@ -343,50 +448,146 @@ class SubmitExerciseAttemptAPIView(APIView):
             audio_data = recognizer.record(source)
             try:
                 transcribed_text = recognizer.recognize_google(audio_data, language="en-US")
-            except Exception:
-                return Response({"error": "Speech recognition failed"}, status=500)
+            except sr.UnknownValueError: # Thêm specific exception
+                # Dọn dẹp file tạm
+                os.remove(full_path)
+                os.remove(wav_path)
+                return Response({"error": "Google Speech Recognition could not understand audio"}, status=status.HTTP_400_BAD_REQUEST)
+            except sr.RequestError as e: # Thêm specific exception
+                 # Dọn dẹp file tạm
+                os.remove(full_path)
+                os.remove(wav_path)
+                return Response({"error": f"Could not request results from Google Speech Recognition service; {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            except Exception as e: # Bắt lỗi chung chung hơn
+                # Dọn dẹp file tạm
+                os.remove(full_path)
+                os.remove(wav_path)
+                return Response({"error": f"Speech recognition failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
         # [3] Giải mã content gốc
         try:
             original_bytes = bytes.fromhex(exercise.speaking_text_content.decode("utf-8"))
             original_text = original_bytes.decode("utf-8")
-        except Exception:
-            return Response({"error": "Failed to decode original text"}, status=500)
+        except Exception as e:
+            # Dọn dẹp file tạm
+            os.remove(full_path)
+            os.remove(wav_path)
+            return Response({"error": f"Failed to decode original text: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # Tính điểm
-        result = calculate_score(transcribed_text, original_text)
+        result = calculate_score(transcribed_text, original_text) # Giả định hàm này trả về một dict có key 'score'
 
         # [4] Lưu tiến trình
         challenge = exercise.challenge
-        progress, _ = UserChallengeProgress.objects.get_or_create(user=user, challenge=challenge)
+        # Lấy hoặc tạo UserChallengeProgress, biến 'created_progress' cho biết nó mới được tạo hay không
+        progress, created_progress = UserChallengeProgress.objects.get_or_create(
+            user=user, 
+            challenge=challenge
+        )
+        
+        # Tạo bản ghi UserExerciseAttempt
         UserExerciseAttempt.objects.create(
             user_challenge_progress=progress,
             challenge_exercise=exercise,
-            user_audio_file_path=audio_file,
+            user_audio_file_path=audio_file, # Lưu file audio gốc
             transcribed_text=transcribed_text,
             score=result['score'],
-            detailed_feedback=result
+            detailed_feedback=result # Lưu toàn bộ kết quả chi tiết từ calculate_score
         )
 
-        progress.score += result['score']
-        total = challenge.exercises.count()
-        done = UserExerciseAttempt.objects.filter(user_challenge_progress=progress).values('challenge_exercise').distinct().count()
-        progress.completion_percentage = round(100 * done / total, 2)
-        if progress.completion_percentage == 100:
+        # Cập nhật điểm và tiến độ của UserChallengeProgress
+        # Logic tính tổng điểm cho progress có thể cần xem xét lại nếu muốn điểm cao nhất thay vì cộng dồn
+        # Hiện tại là cộng dồn điểm của mỗi lần submit vào tổng điểm của progress
+        progress.score += result['score'] 
+        
+        total_exercises_in_challenge = challenge.exercises.count()
+        # Đếm số bài tập duy nhất mà người dùng đã hoàn thành cho challenge này
+        completed_exercises_count = UserExerciseAttempt.objects.filter(
+            user_challenge_progress=progress
+        ).values('challenge_exercise').distinct().count()
+        
+        if total_exercises_in_challenge > 0:
+            progress.completion_percentage = round(100 * completed_exercises_count / total_exercises_in_challenge, 2)
+        else:
+            progress.completion_percentage = 0 # Trường hợp challenge không có exercise
+
+        # Cập nhật status của UserChallengeProgress
+        if progress.completion_percentage >= 100: # Hoàn thành 100%
             progress.status = 'completed'
             progress.completed_date = timezone.now()
+        elif progress.status == 'not_started': # Nếu trước đó là 'not_started' và giờ đã có attempt
+            progress.status = 'in_progress'
+        # Nếu đã là 'in_progress' thì không cần thay đổi trừ khi thành 'completed'
+        
         progress.save()
 
+        # --- BỔ SUNG: CẬP NHẬT PARTICIPANT_COUNT CHO CHALLENGE ---
+        # Đếm số lượng người dùng (users) duy nhất đã có ít nhất một attempt cho challenge này.
+        # UserExerciseAttempt liên kết với UserChallengeProgress, mà UserChallengeProgress liên kết với User.
+        current_participant_count = UserChallengeProgress.objects.filter(
+            challenge=challenge, 
+            userexerciseattempt__isnull=False # Chỉ đếm những progress có ít nhất 1 attempt
+        ).values('user_id').distinct().count()
+        
+        # Chỉ cập nhật nếu giá trị mới khác giá trị cũ để tránh ghi vào DB không cần thiết
+        # và đảm bảo challenge.participant_count không bao giờ giảm (trừ khi có logic xóa attempt)
+        if challenge.participant_count != current_participant_count:
+            challenge.participant_count = current_participant_count
+            challenge.save(update_fields=['participant_count'])
+        # --- KẾT THÚC PHẦN BỔ SUNG ---
+
         # [5] Cập nhật bảng điểm tuần và chuỗi đăng nhập
-        self.update_user_weekly_score(user, result['score'])
+        # Điểm được cộng vào UserWeeklyScore là điểm của bài tập vừa nộp
+        self.update_user_weekly_score(user, int(result['score'])) 
         self.update_user_streak(user)
 
-        # Dọn dẹp file tạm
-        os.remove(full_path)
-        os.remove(wav_path)
+        # Dọn dẹp file tạm sau khi đã xử lý xong và lưu UserExerciseAttempt
+        # (UserExerciseAttempt.user_audio_file_path đã lưu đường dẫn tới file gốc)
+        if os.path.exists(full_path): # Kiểm tra trước khi xóa
+            os.remove(full_path)
+        if os.path.exists(wav_path): # Kiểm tra trước khi xóa
+            os.remove(wav_path)
 
-        return Response(result, status=200)
+        return Response(result, status=status.HTTP_200_OK)
 
+
+class UserChallengeStatsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        challenges_completed = UserChallengeProgress.objects.filter(
+            user=user,
+            status='completed'
+        ).count()
+        active_challenges = UserChallengeProgress.objects.filter(
+            user=user,
+            status='in_progress'
+        ).count()
+        points_earned_data = UserChallengeProgress.objects.filter(
+            user=user
+        ).aggregate(total_points=Sum('score'))
+        points_earned_from_challenges = points_earned_data.get('total_points') or 0
+        try:
+            login_streak_record = UserLoginStreak.objects.get(user=user)
+            today = timezone.now().date()
+            if login_streak_record.last_login_date == today or \
+               login_streak_record.last_login_date == (today - timezone.timedelta(days=1)):
+                current_login_streak = login_streak_record.streak_count
+            else: 
+                current_login_streak = 0
+        except UserLoginStreak.DoesNotExist:
+            current_login_streak = 0
+        
+        stats = {
+            'challenges_completed': challenges_completed,
+            'active_challenges': active_challenges,
+            'points_earned_from_challenges': int(points_earned_from_challenges), # Đảm bảo là int
+            'current_login_streak': current_login_streak,
+        }
+
+        return Response(stats, status=status.HTTP_200_OK)
 class MyChallengeProgressAPIView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
