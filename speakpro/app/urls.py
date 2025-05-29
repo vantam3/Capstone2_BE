@@ -4,7 +4,7 @@ from .views import (
     RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView,
     ChallengeListAPIView, ChallengeDetailAPIView, StartChallengeAPIView, SubmitExerciseAttemptAPIView, MyChallengeProgressAPIView,
     UserProfileUpdateAPIView, ChallengeLeaderboardAPIView, GlobalLeaderboardAPIView, ChallengeExerciseDetailAPIView, AdminDashboardSummaryAPIView,
-    AdminReportsDataAPIView,ExerciseHistoryView,UserChallengeStatsAPIView,
+    WeeklySummaryReportAPIView,ExerciseHistoryView,UserChallengeStatsAPIView,
     )
 from django.conf import settings
 from django.conf.urls.static import static
@@ -27,10 +27,9 @@ urlpatterns = [
     path('speaking-text/search/', SpeakingTextSearchAPIView.as_view(), name='speakingtext-search'),
     path("api/me/exercise-history/", ExerciseHistoryView.as_view(), name="exercise-history"),
     path('api/me/challenge-stats/', UserChallengeStatsAPIView.as_view(), name='user-challenge-stats'),
-
     # ADMIN
     path('api/admin/dashboard-summary/', AdminDashboardSummaryAPIView.as_view(), name='admin-dashboard-summary'),
-    path('api/admin/reports/data/', AdminReportsDataAPIView.as_view(), name='admin-reports-data'), # <--- URL MỚI
+    path('api/reports/weekly-summary/', WeeklySummaryReportAPIView.as_view(), name='report-data'),
     # CHALLENGE
     path('api/challenges/', ChallengeListAPIView.as_view()),
     path('api/challenges/<int:challenge_pk>/', ChallengeDetailAPIView.as_view()),
