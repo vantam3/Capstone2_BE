@@ -12,7 +12,7 @@ from pydub import AudioSegment
 import base64
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view
-from .utils.score import calculate_score  # bạn đã có hàm này
+from .utils.score import calculate_score  
 from django.core.files.storage import default_storage
 
 from rest_framework import generics
@@ -586,19 +586,11 @@ class GlobalLeaderboardAPIView(APIView):
 # API Admin summary
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.contrib.auth.models import User
-from django.db.models import Count
 from django.utils import timezone
 from datetime import timedelta
 from collections import defaultdict
-
-from .models import (
-    SpeakingText,
-    ChallengeExercise,
-    UserAudio,
-    UserExerciseAttempt,
-    UserLoginStreak  # hoặc bảng logins khác nếu có
-)
+from django.db.models import Count
+from .models import User, ChallengeExercise, SpeakingText, UserAudio, UserExerciseAttempt, UserLoginStreak
 
 class AdminDashboardSummaryAPIView(APIView):
     def get(self, request):
@@ -608,18 +600,27 @@ class AdminDashboardSummaryAPIView(APIView):
         # Tổng người dùng & tăng trưởng
         total_users = User.objects.count()
         last_week_users = User.objects.filter(date_joined__gte=last_week).count()
-        user_growth_percent = (last_week_users / (total_users - last_week_users + 1e-6)) * 100
+        if total_users - last_week_users > 0:
+            user_growth_percent = (last_week_users / (total_users - last_week_users)) * 100
+        else:
+            user_growth_percent = 0
 
         # Tổng số bài nói
         total_speaking_contents = ChallengeExercise.objects.count() + SpeakingText.objects.count()
         recent_speaking = ChallengeExercise.objects.filter(created_at__gte=last_week).count()
-        content_growth_percent = (recent_speaking / (total_speaking_contents - recent_speaking + 1e-6)) * 100
+        if total_speaking_contents - recent_speaking > 0:
+            content_growth_percent = (recent_speaking / (total_speaking_contents - recent_speaking)) * 100
+        else:
+            content_growth_percent = 0
 
         # Tổng số lượt luyện tập
         total_attempts = UserAudio.objects.count() + UserExerciseAttempt.objects.count()
         recent_attempts = UserAudio.objects.filter(uploaded_at__gte=last_week).count() + \
                           UserExerciseAttempt.objects.filter(attempted_at__gte=last_week).count()
-        attempt_growth_percent = (recent_attempts / (total_attempts - recent_attempts + 1e-6)) * 100
+        if total_attempts - recent_attempts > 0:
+            attempt_growth_percent = (recent_attempts / (total_attempts - recent_attempts)) * 100
+        else:
+            attempt_growth_percent = 0
 
         # Thống kê đăng nhập mỗi ngày trong tuần
         login_data = UserLoginStreak.objects.filter(last_login_date__gte=now - timedelta(days=6))
@@ -631,15 +632,18 @@ class AdminDashboardSummaryAPIView(APIView):
         day_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
         login_chart_data = [{"day": d, "users": daily_login_chart.get(d, 0)} for d in day_order]
 
-        # Most practiced content
-        practice_count = UserExerciseAttempt.objects.values("challenge_exercise__title").annotate(
-        count=Count("id")).order_by("-count")[:5]
+        # Most practiced content - group thêm id để tránh lặp
+        practice_count = UserExerciseAttempt.objects.values(
+            "challenge_exercise__id",
+            "challenge_exercise__title"
+        ).annotate(
+            count=Count("id")
+        ).order_by("-count")[:5]
 
         most_practiced = [
             {"name": item["challenge_exercise__title"], "count": item["count"]}
             for item in practice_count
         ]
-        most_practiced = sorted(most_practiced, key=lambda x: x["count"], reverse=True)[:5]
 
         return Response({
             "total_users": total_users,
@@ -658,14 +662,21 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from datetime import timedelta
-from django.db.models import Avg, Count, Sum
+from django.db.models import Avg, Count, Q
+from .models import (
+    UserLoginStreak,
+    User,
+    UserAudio,
+    UserExerciseAttempt,
+    UserChallengeProgress,
+)
 
 class WeeklySummaryReportAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         now = timezone.now()
-        start_of_week = now - timedelta(days=now.weekday())  # Thứ 2 tuần này
+        start_of_week = now - timedelta(days=now.weekday())
         end_of_week = start_of_week + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
         # Tổng đăng nhập trong tuần
@@ -673,40 +684,103 @@ class WeeklySummaryReportAPIView(APIView):
             last_login_date__range=(start_of_week, end_of_week)
         ).count()
 
-        # Tổng người dùng mới trong tuần
+        # Người dùng mới trong tuần
         new_users = User.objects.filter(
             date_joined__range=(start_of_week, end_of_week)
         ).count()
 
-        # Tổng lượt luyện tập trong tuần
-        total_attempts = (
-            UserAudio.objects.filter(uploaded_at__range=(start_of_week, end_of_week)).count() +
-            UserExerciseAttempt.objects.filter(attempted_at__range=(start_of_week, end_of_week)).count()
+        # Lượt luyện tập UserAudio
+        audio_attempts_qs = UserAudio.objects.filter(
+            uploaded_at__range=(start_of_week, end_of_week)
         )
+        audio_attempts = audio_attempts_qs.count()
 
-        # Điểm trung bình tuần này 
-        avg_score = UserExerciseAttempt.objects.filter(
+        # Lượt luyện tập UserExerciseAttempt
+        exercise_attempts_qs = UserExerciseAttempt.objects.filter(
             attempted_at__range=(start_of_week, end_of_week)
-        ).aggregate(avg_score=Avg('score'))['avg_score'] or 0
+        )
+        exercise_attempts = exercise_attempts_qs.count()
 
-        # Top 3 bài luyện tập nhiều lượt nhất tuần này
-        popular_exercises = UserExerciseAttempt.objects.filter(
-            attempted_at__range=(start_of_week, end_of_week)
-        ).values('challenge_exercise__title').annotate(attempts=Count('id')).order_by('-attempts')[:3]
+        total_attempts = audio_attempts + exercise_attempts
+
+        # Tỷ lệ hoàn thành challenge trong tuần
+        challenges_started = UserChallengeProgress.objects.filter(
+            last_attempted_date__range=(start_of_week, end_of_week)
+        ).count()
+
+        challenges_completed = UserChallengeProgress.objects.filter(
+            status='completed',
+            completed_date__range=(start_of_week, end_of_week)
+        ).count()
+
+        completion_rate = (challenges_completed / challenges_started * 100) if challenges_started > 0 else 0
+
+        # Điểm trung bình luyện tập tuần này
+        avg_score = exercise_attempts_qs.aggregate(avg_score=Avg('score'))['avg_score'] or 0
+
+        # Top 3 bài luyện tập nhiều lượt nhất
+        popular_exercises = exercise_attempts_qs.values(
+            'challenge_exercise__title'
+        ).annotate(attempts=Count('id')).order_by('-attempts')[:3]
 
         popular_exercises_list = [
             {"title": ex['challenge_exercise__title'], "attempts": ex['attempts']}
             for ex in popular_exercises
         ]
 
+        # Lấy user ids hoạt động tuần này từ các bảng (qua quan hệ đúng)
+        user_ids_login = UserLoginStreak.objects.filter(
+            last_login_date__range=(start_of_week, end_of_week)
+        ).values_list('user_id', flat=True)
+
+        user_ids_audio = audio_attempts_qs.values_list('user_id', flat=True)
+
+        user_ids_exercise = exercise_attempts_qs.values_list('user_challenge_progress__user_id', flat=True)
+
+        active_user_ids = set(user_ids_login) | set(user_ids_audio) | set(user_ids_exercise)
+
+        # Tính DAU mỗi ngày
+        dau_counts = []
+        for day_offset in range(7):
+            day = start_of_week + timedelta(days=day_offset)
+            next_day = day + timedelta(days=1)
+
+            login_users = set(UserLoginStreak.objects.filter(
+                last_login_date__range=(day, next_day)
+            ).values_list('user_id', flat=True))
+
+            audio_users = set(UserAudio.objects.filter(
+                uploaded_at__range=(day, next_day)
+            ).values_list('user_id', flat=True))
+
+            exercise_users = set(UserExerciseAttempt.objects.filter(
+                attempted_at__range=(day, next_day)
+            ).values_list('user_challenge_progress__user_id', flat=True))
+
+            active_users_day = login_users | audio_users | exercise_users
+
+            dau_counts.append({"day": day.strftime("%a"), "active_users": len(active_users_day)})
+
+        # Top 3 người dùng luyện tập nhiều nhất
+        top_users_qs = exercise_attempts_qs.values(
+            'user_challenge_progress__user__username'
+        ).annotate(attempts=Count('id')).order_by('-attempts')[:3]
+
+        top_users_list = [{"username": u['user_challenge_progress__user__username'], "attempts": u['attempts']} for u in top_users_qs]
+
         data = {
             "week_start": start_of_week.strftime("%Y-%m-%d"),
             "week_end": end_of_week.strftime("%Y-%m-%d"),
             "login_count": login_count,
             "new_users": new_users,
+            "audio_attempts": audio_attempts,
+            "exercise_attempts": exercise_attempts,
             "total_attempts": total_attempts,
+            "completion_rate_percent": round(completion_rate, 2),
             "average_score": round(avg_score, 2),
             "popular_exercises": popular_exercises_list,
+            "daily_active_users": dau_counts,
+            "top_active_users": top_users_list,
         }
 
         return Response(data)
