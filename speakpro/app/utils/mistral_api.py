@@ -21,7 +21,7 @@ You are a friendly English tutor helping Vietnamese students practice speaking.
     payload = {
         "inputs": prompt,
         "parameters": {
-            "max_new_tokens": 1024,
+            "max_new_tokens": 2048,
             "return_full_text": False
         }
     }

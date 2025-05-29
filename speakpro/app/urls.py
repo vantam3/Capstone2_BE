@@ -4,7 +4,7 @@ from .views import (
     RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView,
     ChallengeListAPIView, ChallengeDetailAPIView, StartChallengeAPIView, SubmitExerciseAttemptAPIView, MyChallengeProgressAPIView,
     UserProfileUpdateAPIView, ChallengeLeaderboardAPIView, GlobalLeaderboardAPIView, ChallengeExerciseDetailAPIView, AdminDashboardSummaryAPIView,
-    AdminReportsDataAPIView,UserActivityHistoryAPIView,UserChallengeStatsAPIView,
+    AdminReportsDataAPIView,ExerciseHistoryView,UserChallengeStatsAPIView,
     )
 from django.conf import settings
 from django.conf.urls.static import static
@@ -25,7 +25,7 @@ urlpatterns = [
     path('api/profile/update/', UserProfileUpdateAPIView.as_view(), name='user-profile-update'),
     # SEARCH
     path('speaking-text/search/', SpeakingTextSearchAPIView.as_view(), name='speakingtext-search'),
-    path('api/me/activity-history/', UserActivityHistoryAPIView.as_view(), name='user-activity-history'),
+    path("api/me/exercise-history/", ExerciseHistoryView.as_view(), name="exercise-history"),
     path('api/me/challenge-stats/', UserChallengeStatsAPIView.as_view(), name='user-challenge-stats'),
 
     # ADMIN
@@ -72,6 +72,7 @@ urlpatterns = [
     
     #ai
     path('api/dialogue/', views.DialogueAPIView.as_view(), name='ai-dialogue'),
+    path("api/submit-reply/", views.SubmitReplyAPIView.as_view()),
 
 
 ]    + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
