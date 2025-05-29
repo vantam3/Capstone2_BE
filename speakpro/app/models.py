@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.conf import settings
 
-# Bảng để lưu thông tin thể loại
 class Genre(models.Model):
     name = models.CharField(max_length=100, unique=True)  # Tên thể loại (ví dụ: truyện, hội thoại, thuyết trình,...)
 
@@ -47,6 +47,7 @@ class UserAudio(models.Model):
         return f"Audio file of {self.user.username} uploaded at {self.uploaded_at}"
 # Bảng để lưu kết quả ghi âm và so sánh
 class SpeakingResult(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     speaking_text = models.ForeignKey(SpeakingText, on_delete=models.CASCADE, related_name='speaking_results')  # Liên kết với đoạn văn mẫu
     user_text = models.TextField()  # Văn bản người dùng đã chuyển đổi từ giọng nói
     score = models.DecimalField(max_digits=5, decimal_places=2)  # Điểm so sánh giữa văn bản người dùng và văn bản gốc

@@ -1021,6 +1021,7 @@ def split_audio_to_chunks(audio_path, chunk_length_ms=15000):
     return chunks
 
 class SubmitSpeakingAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def post(self, request):
         audio_file = request.FILES.get("audio_file")
         speaking_text_id = request.data.get("speaking_text_id")
@@ -1087,6 +1088,7 @@ class SubmitSpeakingAPIView(APIView):
 
         # Lưu kết quả thô vào DB nếu muốn (tùy bạn)
         SpeakingResult.objects.create(
+            user=request.user,
             speaking_text=speaking_text,
             user_text=user_text_raw,
             score=result["score"]
@@ -1098,6 +1100,32 @@ class SubmitSpeakingAPIView(APIView):
 
         # Trả kết quả
         return Response(result, status=status.HTTP_200_OK)
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
+from rest_framework.response import Response
+
+class SpeakingResultHistoryAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        results = SpeakingResult.objects.filter(user=user).select_related('speaking_text__genre').order_by('-timestamp')
+
+        data = []
+        for r in results:
+            data.append({
+                "speaking_text_id": r.speaking_text.id,
+                "speaking_text_title": r.speaking_text.title,  # thêm trường title
+
+                "speaking_text_content": r.speaking_text.content,
+                "score": r.score,
+                "timestamp": r.timestamp.isoformat(),
+                "topic_name": r.speaking_text.genre.name if r.speaking_text.genre else None,
+                "genre_name": r.speaking_text.genre.name if r.speaking_text.genre else None,
+            })
+        return Response(data)
+
+
 
 
 

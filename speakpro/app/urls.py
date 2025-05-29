@@ -69,7 +69,8 @@ urlpatterns = [
     path('upload-user-audio/', views.upload_user_audio, name='upload_user_audio'),
 
     path('api/submit-speaking/', views.SubmitSpeakingAPIView.as_view(), name='submit-speaking'),
-    
+    path('api/speaking-results/history/', views.SpeakingResultHistoryAPIView.as_view()),
+
     #ai
     path('api/dialogue/', views.DialogueAPIView.as_view(), name='ai-dialogue'),
     path("api/submit-reply/", views.SubmitReplyAPIView.as_view()),
