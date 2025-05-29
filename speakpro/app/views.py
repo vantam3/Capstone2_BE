@@ -734,49 +734,57 @@ class UserDetailAPIView(RetrieveAPIView):
         
 ##################################################### CRUD TAI LIEU #######################################################
 # API để thêm một SpeakingText mới
+from .utils.convertToMp3 import generate_audio_for_text  # nơi bạn đặt hàm trên
 class SpeakingTextCreateAPIView(APIView):
     def post(self, request):
-        genre_data = request.data.get('genre')  # Lấy dữ liệu genre từ request
-        level_data = request.data.get('level')  # Lấy dữ liệu level từ request
+        genre_data = request.data.get('genre')
+        level_data = request.data.get('level')
 
-        # Kiểm tra nếu genre là ID hoặc name
-        if isinstance(genre_data, dict):  # Nếu genre được gửi dưới dạng dict (chứa name)
-            genre_name = genre_data.get('name')  # Lấy name của genre từ request
+        # Xử lý Genre
+        if isinstance(genre_data, dict):
+            genre_name = genre_data.get('name')
             genre = Genre.objects.filter(name=genre_name).first()
             if not genre:
-                genre = Genre.objects.create(name=genre_name)  # Tạo mới nếu không có
-        else:  # Nếu genre là ID
-            genre_id = genre_data  # Lấy genre_id trực tiếp từ request
+                genre = Genre.objects.create(name=genre_name)
+        else:
+            genre_id = genre_data
             genre = Genre.objects.filter(id=genre_id).first()
             if not genre:
                 return Response({"error": "Genre not found with the provided ID."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Kiểm tra nếu level là ID và lấy level tương ứng
-        if isinstance(level_data, dict):  # Nếu level được gửi dưới dạng dict (chứa name)
-            level_name = level_data.get('name')  # Lấy name của level từ request
+        # Xử lý Level
+        if isinstance(level_data, dict):
+            level_name = level_data.get('name')
             level = Level.objects.filter(name=level_name).first()
             if not level:
-                level = Level.objects.create(name=level_name)  # Tạo mới nếu không có
-        else:  # Nếu level là ID
-            level_id = level_data  # Lấy level_id trực tiếp từ request
+                level = Level.objects.create(name=level_name)
+        else:
+            level_id = level_data
             level = Level.objects.filter(id=level_id).first()
             if not level:
                 return Response({"error": "Level not found with the provided ID."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Giải mã nội dung content nếu có
-        content_base64 = request.data.get('content')
-        if content_base64:
-            content_binary = base64.b64decode(content_base64)  # Giải mã base64 thành binary
+        # Lấy và chuyển đổi content thành binary
+        content_text = request.data.get('content')
+        if content_text:
+            content_binary = content_text.encode('utf-8')  # Chuyển text thành binary
         else:
             content_binary = None
 
-        # Tạo SpeakingText và lưu vào cơ sở dữ liệu
+        # Tạo SpeakingText
         serializer = SpeakingTextSerializer(data=request.data)
         if serializer.is_valid():
-            # Liên kết với genre và level, lưu content đã giải mã vào cơ sở dữ liệu
-            serializer.save(genre=genre, level=level, content=content_binary)  # Lưu vào cơ sở dữ liệu
+            serializer.save(genre=genre, level=level, content=content_binary)
+            speaking_text = serializer.save()
+            generate_audio_for_text(speaking_text)
+
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        # 👇 THÊM DÒNG NÀY
+        print("[❌ Serializer Errors]", serializer.errors)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 #API EDIT
 class SpeakingTextUpdateAPIView(generics.UpdateAPIView):
     queryset = SpeakingText.objects.all()  # Lấy tất cả tài liệu
@@ -872,7 +880,7 @@ class DialogueAPIView(APIView):
         The dialogue should:
         - Start with a natural greeting or question from AI.
         - Include a mix of statements and questions from both speakers.
-        - Be around 6 to 8 turns total (3 to 4 turns per speaker).
+        - Be around 6 to 8 turns total (6 to 8 turns per speaker).
         - End with a natural conclusion or final comment from AI.
 
         {variation}

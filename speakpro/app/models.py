@@ -28,7 +28,7 @@ class SpeakingText(models.Model):
 # Bảng để lưu âm thanh của từng đoạn văn mẫu
 class Audio(models.Model):
     speaking_text = models.ForeignKey(SpeakingText, on_delete=models.CASCADE, related_name='audio_files')  # Liên kết với đoạn văn mẫu
-    audio_file = models.FileField(upload_to='audio_files/')  # Lưu trữ tệp âm thanh trong thư mục 'audio_files'
+    audio_file = models.FileField(upload_to='file_audio/')  # Lưu trữ tệp âm thanh trong thư mục 'audio_files'
 
     def __str__(self):
         return f"Audio for {self.speaking_text.title}"
