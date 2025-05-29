@@ -3,7 +3,8 @@ from .views import  GenreListView, GenreDetailView, SpeakingTextListView, Speaki
 from .views import (
     RegisterView, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView,admin_dashboard, SpeakingTextSearchAPIView,
     ChallengeListAPIView, ChallengeDetailAPIView, StartChallengeAPIView, SubmitExerciseAttemptAPIView, MyChallengeProgressAPIView,
-    UserProfileUpdateAPIView, ChallengeLeaderboardAPIView, GlobalLeaderboardAPIView, ChallengeExerciseDetailAPIView,
+    UserProfileUpdateAPIView, ChallengeLeaderboardAPIView, GlobalLeaderboardAPIView, ChallengeExerciseDetailAPIView, AdminDashboardSummaryAPIView,
+    AdminReportsDataAPIView,ExerciseHistoryView,UserChallengeStatsAPIView,
     )
 from django.conf import settings
 from django.conf.urls.static import static
@@ -15,15 +16,21 @@ urlpatterns = [
     path('users/', UserListView.as_view(), name='user-list'),  
     path('users/<int:id>/', views.UserDetailAPIView.as_view(), name='user-detail'),
     # AUTH
-    path('register/', RegisterView.as_view(), name='register'),  # Route cho đăng ký
-    path('login/', LoginView.as_view(), name='login'),  # Route cho đăng nhập
-    path('logout/', LogoutView.as_view(), name='logout'),  # Route cho đăng xuất
-    path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),  # Route cho quên mật khẩu
-    path('reset-password/', ResetPasswordView.as_view(), name='reset_password'),  # Route cho đặt lại mật khẩu
+    path('register/', RegisterView.as_view(), name='register'),  
+    path('login/', LoginView.as_view(), name='login'), 
+    path('logout/', LogoutView.as_view(), name='logout'), 
+    path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),  
+    path('reset-password/', ResetPasswordView.as_view(), name='reset_password'), 
     path('admin/dashboard/', admin_dashboard, name='admin_dashboard'),
     path('api/profile/update/', UserProfileUpdateAPIView.as_view(), name='user-profile-update'),
-    # Search
+    # SEARCH
     path('speaking-text/search/', SpeakingTextSearchAPIView.as_view(), name='speakingtext-search'),
+    path("api/me/exercise-history/", ExerciseHistoryView.as_view(), name="exercise-history"),
+    path('api/me/challenge-stats/', UserChallengeStatsAPIView.as_view(), name='user-challenge-stats'),
+
+    # ADMIN
+    path('api/admin/dashboard-summary/', AdminDashboardSummaryAPIView.as_view(), name='admin-dashboard-summary'),
+    path('api/admin/reports/data/', AdminReportsDataAPIView.as_view(), name='admin-reports-data'), # <--- URL MỚI
     # CHALLENGE
     path('api/challenges/', ChallengeListAPIView.as_view()),
     path('api/challenges/<int:challenge_pk>/', ChallengeDetailAPIView.as_view()),

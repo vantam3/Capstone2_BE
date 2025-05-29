@@ -153,15 +153,14 @@ class ForgotPasswordView(APIView):
 
         try:
             send_mail(
-                subject="Password Reset Confirmation Code - Speakpro", # Updated subject
+                subject="Password Reset Confirmation Code - Speakpro", 
                 message=f"Hello {user.username or user.first_name or 'User'},\n\nYour confirmation code is: {confirmation_code}\nUse this code to reset your password. It will expire in 10 minutes.",
-                from_email=settings.EMAIL_HOST_USER,
+                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[email],
                 fail_silently=False,
             )
             return Response({'message': 'Confirmation code sent to your email!'}, status=status.HTTP_200_OK)
         except Exception as e:
-            # Log the error e for debugging
             print(f"Error sending password reset email to {email}: {e}")
             return Response({'error': 'Failed to send email. Please try again later.'}, # Removed details from response 'details': str(e)
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -175,8 +174,6 @@ class ResetPasswordView(APIView):
         email = serializer.validated_data['email']
         confirmation_code = serializer.validated_data['confirmation_code']
         new_password = serializer.validated_data['new_password']
-
-        # Retrieve the confirmation code from cache
         cached_code = cache.get(f"password_reset_code_{email}")
 
         if not cached_code:
@@ -224,7 +221,7 @@ class UserProfileUpdateAPIView(generics.UpdateAPIView):
 from rest_framework import generics
 from django.db.models import Q
 from .models import SpeakingText
-from .serializers import SpeakingTextSerializer
+from .serializers import SpeakingTextSerializer, ExerciseHistorySerializer
 
 class SpeakingTextSearchAPIView(generics.ListAPIView):
     serializer_class = SpeakingTextSerializer
@@ -241,6 +238,16 @@ class SpeakingTextSearchAPIView(generics.ListAPIView):
             queryset = queryset.filter(title__icontains=title)
 
         return queryset
+    
+class ExerciseHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        attempts = UserExerciseAttempt.objects.filter(
+            user_challenge_progress__user=request.user
+        ).order_by('-attempted_at')
+        serializer = ExerciseHistorySerializer(attempts, many=True)
+        return Response(serializer.data)
 # ==========================================================================================================================================
 # API Challenge
 from rest_framework.permissions import IsAuthenticated
@@ -287,11 +294,6 @@ class StartChallengeAPIView(APIView):
             progress.save()
         return Response({"message": "Challenge started", "status": progress.status})
 
-class ChallengeExerciseDetailAPIView(generics.RetrieveAPIView):
-    queryset = ChallengeExercise.objects.all()
-    serializer_class = ChallengeExerciseDetailSerializer
-    permission_classes = [permissions.AllowAny]
-
 class SubmitExerciseAttemptAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
@@ -300,42 +302,53 @@ class SubmitExerciseAttemptAPIView(APIView):
         today = timezone.now().date()
         year, week, _ = today.isocalendar()
         obj, created = UserWeeklyScore.objects.get_or_create(user=user, year=year, week=week)
-        obj.total_score += score
+        obj.total_score += score # Giả sử score ở đây là điểm của bài tập vừa nộp
         obj.save()
 
     def update_user_streak(self, user):
         today = timezone.now().date()
         streak, created = UserLoginStreak.objects.get_or_create(user=user)
 
-        if streak.last_login_date is None:
+        if streak.last_login_date is None: # Người dùng chưa đăng nhập bao giờ hoặc streak đã bị reset
             streak.streak_count = 1
         else:
             delta = (today - streak.last_login_date).days
-            if delta == 1:
+            if delta == 1: # Đăng nhập ngày liên tiếp
                 streak.streak_count += 1
-            elif delta > 1:
-                streak.streak_count = 1  # reset nếu gián đoạn
-
-        streak.last_login_date = today
+            elif delta > 1: # Bỏ lỡ ngày, reset streak
+                streak.streak_count = 1
+            # Nếu delta == 0 (đăng nhập nhiều lần trong ngày), không thay đổi streak_count
+        
+        # Chỉ cập nhật last_login_date nếu nó chưa phải là hôm nay hoặc khi streak được set/reset
+        if streak.last_login_date != today or delta != 0 : # delta != 0 để bao gồm cả trường hợp streak_count = 1
+            streak.last_login_date = today
+        
         streak.save()
 
     def post(self, request, exercise_pk):
         user = request.user
         audio_file = request.FILES.get('audio_file')
         if not audio_file:
-            return Response({"error": "Missing audio file"}, status=400)
+            return Response({"error": "Missing audio file"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             exercise = ChallengeExercise.objects.get(pk=exercise_pk)
         except ChallengeExercise.DoesNotExist:
-            return Response({"error": "Exercise not found"}, status=404)
+            return Response({"error": "Exercise not found"}, status=status.HTTP_404_NOT_FOUND)
 
         # [1] Chuyển đổi WebM -> WAV
         temp_path = default_storage.save('temp_challenge_input.webm', audio_file)
         full_path = os.path.join(default_storage.location, temp_path)
         wav_path = full_path.replace('.webm', '.wav')
-        sound = AudioSegment.from_file(full_path, format="webm")
-        sound.export(wav_path, format="wav")
+        try:
+            sound = AudioSegment.from_file(full_path, format="webm")
+            sound.export(wav_path, format="wav")
+        except Exception as e:
+            # Dọn dẹp file tạm nếu có lỗi chuyển đổi
+            if os.path.exists(full_path):
+                os.remove(full_path)
+            return Response({"error": f"Audio conversion failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
         # [2] Nhận diện giọng nói
         recognizer = sr.Recognizer()
@@ -343,50 +356,146 @@ class SubmitExerciseAttemptAPIView(APIView):
             audio_data = recognizer.record(source)
             try:
                 transcribed_text = recognizer.recognize_google(audio_data, language="en-US")
-            except Exception:
-                return Response({"error": "Speech recognition failed"}, status=500)
+            except sr.UnknownValueError: # Thêm specific exception
+                # Dọn dẹp file tạm
+                os.remove(full_path)
+                os.remove(wav_path)
+                return Response({"error": "Google Speech Recognition could not understand audio"}, status=status.HTTP_400_BAD_REQUEST)
+            except sr.RequestError as e: # Thêm specific exception
+                 # Dọn dẹp file tạm
+                os.remove(full_path)
+                os.remove(wav_path)
+                return Response({"error": f"Could not request results from Google Speech Recognition service; {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            except Exception as e: # Bắt lỗi chung chung hơn
+                # Dọn dẹp file tạm
+                os.remove(full_path)
+                os.remove(wav_path)
+                return Response({"error": f"Speech recognition failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
         # [3] Giải mã content gốc
         try:
             original_bytes = bytes.fromhex(exercise.speaking_text_content.decode("utf-8"))
             original_text = original_bytes.decode("utf-8")
-        except Exception:
-            return Response({"error": "Failed to decode original text"}, status=500)
+        except Exception as e:
+            # Dọn dẹp file tạm
+            os.remove(full_path)
+            os.remove(wav_path)
+            return Response({"error": f"Failed to decode original text: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # Tính điểm
-        result = calculate_score(transcribed_text, original_text)
+        result = calculate_score(transcribed_text, original_text) # Giả định hàm này trả về một dict có key 'score'
 
         # [4] Lưu tiến trình
         challenge = exercise.challenge
-        progress, _ = UserChallengeProgress.objects.get_or_create(user=user, challenge=challenge)
+        # Lấy hoặc tạo UserChallengeProgress, biến 'created_progress' cho biết nó mới được tạo hay không
+        progress, created_progress = UserChallengeProgress.objects.get_or_create(
+            user=user, 
+            challenge=challenge
+        )
+        
+        # Tạo bản ghi UserExerciseAttempt
         UserExerciseAttempt.objects.create(
             user_challenge_progress=progress,
             challenge_exercise=exercise,
-            user_audio_file_path=audio_file,
+            user_audio_file_path=audio_file, # Lưu file audio gốc
             transcribed_text=transcribed_text,
             score=result['score'],
-            detailed_feedback=result
+            detailed_feedback=result # Lưu toàn bộ kết quả chi tiết từ calculate_score
         )
 
-        progress.score += result['score']
-        total = challenge.exercises.count()
-        done = UserExerciseAttempt.objects.filter(user_challenge_progress=progress).values('challenge_exercise').distinct().count()
-        progress.completion_percentage = round(100 * done / total, 2)
-        if progress.completion_percentage == 100:
+        # Cập nhật điểm và tiến độ của UserChallengeProgress
+        # Logic tính tổng điểm cho progress có thể cần xem xét lại nếu muốn điểm cao nhất thay vì cộng dồn
+        # Hiện tại là cộng dồn điểm của mỗi lần submit vào tổng điểm của progress
+        progress.score += result['score'] 
+        
+        total_exercises_in_challenge = challenge.exercises.count()
+        # Đếm số bài tập duy nhất mà người dùng đã hoàn thành cho challenge này
+        completed_exercises_count = UserExerciseAttempt.objects.filter(
+            user_challenge_progress=progress
+        ).values('challenge_exercise').distinct().count()
+        
+        if total_exercises_in_challenge > 0:
+            progress.completion_percentage = round(100 * completed_exercises_count / total_exercises_in_challenge, 2)
+        else:
+            progress.completion_percentage = 0 # Trường hợp challenge không có exercise
+
+        # Cập nhật status của UserChallengeProgress
+        if progress.completion_percentage >= 100: # Hoàn thành 100%
             progress.status = 'completed'
             progress.completed_date = timezone.now()
+        elif progress.status == 'not_started': # Nếu trước đó là 'not_started' và giờ đã có attempt
+            progress.status = 'in_progress'
+        # Nếu đã là 'in_progress' thì không cần thay đổi trừ khi thành 'completed'
+        
         progress.save()
 
+        # --- BỔ SUNG: CẬP NHẬT PARTICIPANT_COUNT CHO CHALLENGE ---
+        # Đếm số lượng người dùng (users) duy nhất đã có ít nhất một attempt cho challenge này.
+        # UserExerciseAttempt liên kết với UserChallengeProgress, mà UserChallengeProgress liên kết với User.
+        current_participant_count = UserChallengeProgress.objects.filter(
+            challenge=challenge, 
+            userexerciseattempt__isnull=False # Chỉ đếm những progress có ít nhất 1 attempt
+        ).values('user_id').distinct().count()
+        
+        # Chỉ cập nhật nếu giá trị mới khác giá trị cũ để tránh ghi vào DB không cần thiết
+        # và đảm bảo challenge.participant_count không bao giờ giảm (trừ khi có logic xóa attempt)
+        if challenge.participant_count != current_participant_count:
+            challenge.participant_count = current_participant_count
+            challenge.save(update_fields=['participant_count'])
+        # --- KẾT THÚC PHẦN BỔ SUNG ---
+
         # [5] Cập nhật bảng điểm tuần và chuỗi đăng nhập
-        self.update_user_weekly_score(user, result['score'])
+        # Điểm được cộng vào UserWeeklyScore là điểm của bài tập vừa nộp
+        self.update_user_weekly_score(user, int(result['score'])) 
         self.update_user_streak(user)
 
-        # Dọn dẹp file tạm
-        os.remove(full_path)
-        os.remove(wav_path)
+        # Dọn dẹp file tạm sau khi đã xử lý xong và lưu UserExerciseAttempt
+        # (UserExerciseAttempt.user_audio_file_path đã lưu đường dẫn tới file gốc)
+        if os.path.exists(full_path): # Kiểm tra trước khi xóa
+            os.remove(full_path)
+        if os.path.exists(wav_path): # Kiểm tra trước khi xóa
+            os.remove(wav_path)
 
-        return Response(result, status=200)
+        return Response(result, status=status.HTTP_200_OK)
 
+
+class UserChallengeStatsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        challenges_completed = UserChallengeProgress.objects.filter(
+            user=user,
+            status='completed'
+        ).count()
+        active_challenges = UserChallengeProgress.objects.filter(
+            user=user,
+            status='in_progress'
+        ).count()
+        points_earned_data = UserChallengeProgress.objects.filter(
+            user=user
+        ).aggregate(total_points=Sum('score'))
+        points_earned_from_challenges = points_earned_data.get('total_points') or 0
+        try:
+            login_streak_record = UserLoginStreak.objects.get(user=user)
+            today = timezone.now().date()
+            if login_streak_record.last_login_date == today or \
+               login_streak_record.last_login_date == (today - timezone.timedelta(days=1)):
+                current_login_streak = login_streak_record.streak_count
+            else: 
+                current_login_streak = 0
+        except UserLoginStreak.DoesNotExist:
+            current_login_streak = 0
+        
+        stats = {
+            'challenges_completed': challenges_completed,
+            'active_challenges': active_challenges,
+            'points_earned_from_challenges': int(points_earned_from_challenges), # Đảm bảo là int
+            'current_login_streak': current_login_streak,
+        }
+
+        return Response(stats, status=status.HTTP_200_OK)
 class MyChallengeProgressAPIView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
@@ -500,7 +609,287 @@ class GlobalLeaderboardAPIView(APIView):
         leaderboard = sorted(leaderboard, key=lambda x: x["total_points"], reverse=True)
 
         return Response({"leaderboard": leaderboard})
+# ==========================================================================================================================================
+# API Admin summary
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.contrib.auth.models import User
+from django.db.models import Count
+from django.utils import timezone
+from datetime import timedelta
+from collections import defaultdict
 
+from .models import (
+    SpeakingText,
+    ChallengeExercise,
+    UserAudio,
+    UserExerciseAttempt,
+    UserLoginStreak  # hoặc bảng logins khác nếu có
+)
+
+class AdminDashboardSummaryAPIView(APIView):
+    def get(self, request):
+        now = timezone.now()
+        last_week = now - timedelta(days=7)
+
+        # Tổng người dùng & tăng trưởng
+        total_users = User.objects.count()
+        last_week_users = User.objects.filter(date_joined__gte=last_week).count()
+        user_growth_percent = (last_week_users / (total_users - last_week_users + 1e-6)) * 100
+
+        # Tổng số bài nói
+        total_speaking_contents = ChallengeExercise.objects.count()
+        recent_speaking = ChallengeExercise.objects.filter(created_at__gte=last_week).count()
+        content_growth_percent = (recent_speaking / (total_speaking_contents - recent_speaking + 1e-6)) * 100
+
+        # Tổng số lượt luyện tập
+        total_attempts = UserAudio.objects.count() + UserExerciseAttempt.objects.count()
+        recent_attempts = UserAudio.objects.filter(uploaded_at__gte=last_week).count() + \
+                          UserExerciseAttempt.objects.filter(attempted_at__gte=last_week).count()
+        attempt_growth_percent = (recent_attempts / (total_attempts - recent_attempts + 1e-6)) * 100
+
+        # Thống kê đăng nhập mỗi ngày trong tuần
+        login_data = UserLoginStreak.objects.filter(last_login_date__gte=now - timedelta(days=6))
+        daily_login_chart = defaultdict(int)
+        for item in login_data:
+            weekday = item.last_login_date.strftime('%a')  # Mon, Tue,...
+            daily_login_chart[weekday] += 1
+
+        day_order = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        login_chart_data = [{"day": d, "users": daily_login_chart.get(d, 0)} for d in day_order]
+
+        # Most practiced content
+        practice_count = UserExerciseAttempt.objects.values("challenge_exercise__title").annotate(
+        count=Count("id")).order_by("-count")[:5]
+
+        most_practiced = [
+            {"name": item["challenge_exercise__title"], "count": item["count"]}
+            for item in practice_count
+        ]
+        most_practiced = sorted(most_practiced, key=lambda x: x["count"], reverse=True)[:5]
+
+        return Response({
+            "total_users": total_users,
+            "user_growth_percent": round(user_growth_percent),
+            "total_speaking_contents": total_speaking_contents,
+            "content_growth_percent": round(content_growth_percent),
+            "total_practice_attempts": total_attempts,
+            "attempt_growth_percent": round(attempt_growth_percent),
+            "daily_login_chart": login_chart_data,
+            "most_practiced_content": most_practiced
+        })
+# ==========================================================================================================================================
+# API Report
+from django.utils import timezone
+from datetime import timedelta, datetime
+from django.db.models import Count, Avg
+from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
+from collections import defaultdict
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.contrib.auth.models import User
+from .models import (
+    SpeakingText,
+    ChallengeExercise,
+    UserExerciseAttempt,
+    UserLoginStreak,
+    Genre,
+    SpeakingResult,
+    UserChallengeProgress
+)
+
+class AdminReportsDataAPIView(APIView):
+
+    def _get_date_range(self, period_str):
+        now = timezone.now()
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999) # Cuối ngày hiện tại
+        
+        if period_str == 'day': # Today
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period_str == 'week': # This Week (tính từ Thứ Hai của tuần hiện tại)
+            start_date = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period_str == 'month': # This Month
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else: # Mặc định là 'This Week' nếu period_str không hợp lệ
+            start_date = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            period_str = 'week' # Cập nhật lại period_str để response được chính xác
+        
+        return start_date, end_date, period_str
+
+    def _get_time_unit_accessor(self, granularity_str):
+        # Mặc định là 'day' nếu granularity_str không hợp lệ hoặc không được cung cấp
+        if granularity_str == 'month':
+            return TruncMonth, "%Y-%m"
+        elif granularity_str == 'week':
+            # TruncWeek trả về Thứ Hai của tuần. %W (00-53, Thứ Hai là ngày đầu tuần)
+            return TruncWeek, "%Y-W%W" 
+        return TruncDay, "%Y-%m-%d" # Mặc định là 'day'
+
+    def get_user_activity_preview_data(self, start_date, end_date, trunc_func, date_format_str):
+        # Logins
+        logins_q = (UserLoginStreak.objects
+                    .filter(last_login_date__range=(start_date.date(), end_date.date()))
+                    .annotate(period_unit=trunc_func('last_login_date'))
+                    .values('period_unit')
+                    .annotate(count=Count('user', distinct=True))
+                    .order_by('period_unit'))
+        
+        # Exercises Completed
+        completed_q = (UserChallengeProgress.objects
+                       .filter(status='completed', completed_date__range=(start_date, end_date))
+                       .annotate(period_unit=trunc_func('completed_date'))
+                       .values('period_unit')
+                       .annotate(count=Count('id'))
+                       .order_by('period_unit'))
+
+        # Practice Attempts
+        challenge_attempts_q = (UserExerciseAttempt.objects
+                                .filter(attempted_at__range=(start_date, end_date))
+                                .annotate(period_unit=trunc_func('attempted_at'))
+                                .values('period_unit')
+                                .annotate(count=Count('id'))
+                                .order_by('period_unit'))
+        
+        general_practice_q = (SpeakingResult.objects
+                              .filter(timestamp__range=(start_date, end_date))
+                              .annotate(period_unit=trunc_func('timestamp'))
+                              .values('period_unit')
+                              .annotate(count=Count('id'))
+                              .order_by('period_unit'))
+
+        # Gộp dữ liệu: Tạo một tập hợp tất cả các 'period_unit' từ các query
+        all_periods = set()
+        for q_set in [logins_q, completed_q, challenge_attempts_q, general_practice_q]:
+            for item in q_set:
+                all_periods.add(item['period_unit'])
+        
+        sorted_periods = sorted(list(all_periods))
+        
+        results = []
+        for period_dt_obj in sorted_periods:
+            period_key_str = period_dt_obj.strftime(date_format_str)
+            
+            logins_count = next((item['count'] for item in logins_q if item['period_unit'] == period_dt_obj), 0)
+            completed_count = next((item['count'] for item in completed_q if item['period_unit'] == period_dt_obj), 0)
+            challenge_attempt_count = next((item['count'] for item in challenge_attempts_q if item['period_unit'] == period_dt_obj), 0)
+            general_practice_count = next((item['count'] for item in general_practice_q if item['period_unit'] == period_dt_obj), 0)
+            total_attempts = challenge_attempt_count + general_practice_count
+
+            results.append({
+                "name": period_key_str,
+                "logins": logins_count,
+                "exercisesCompleted": completed_count,
+                "practiceAttempts": total_attempts 
+            })
+        return results
+
+    def get_content_engagement_preview_data(self, start_date, end_date):
+        genres = Genre.objects.all()
+        results = []
+        for genre in genres:
+            speaking_texts_in_genre = SpeakingText.objects.filter(genre=genre)
+            attempts_count = SpeakingResult.objects.filter(
+                speaking_text__in=speaking_texts_in_genre,
+                timestamp__range=(start_date, end_date)
+            ).count()
+            
+            avg_score_data = SpeakingResult.objects.filter(
+                speaking_text__in=speaking_texts_in_genre,
+                timestamp__range=(start_date, end_date)
+            ).aggregate(avg=Avg('score'))
+            average_score = round(avg_score_data['avg'], 1) if avg_score_data['avg'] else 0
+            
+            if attempts_count > 0 or average_score > 0: 
+                results.append({
+                    "name": genre.name,
+                    "attempts": attempts_count,
+                    "averageScore": average_score
+                })
+        return results
+
+    def get_user_growth_preview_data(self, start_date, end_date, trunc_func, date_format_str):
+        user_growth = (User.objects
+                       .filter(date_joined__range=(start_date, end_date))
+                       .annotate(period_unit=trunc_func('date_joined'))
+                       .values('period_unit')
+                       .annotate(new_users=Count('id'))
+                       .order_by('period_unit'))
+        
+        results = [{"name": item['period_unit'].strftime(date_format_str), "users": item['new_users']} for item in user_growth]
+        return results
+        
+
+    def get_learning_performance_preview_data(self, start_date, end_date, trunc_func, date_format_str):
+        # Tính điểm trung bình từ UserExerciseAttempt và SpeakingResult gộp lại
+        
+        all_scores_data = []
+        challenge_scores = UserExerciseAttempt.objects.filter(attempted_at__range=(start_date, end_date)).values_list('attempted_at', 'score')
+        general_scores = SpeakingResult.objects.filter(timestamp__range=(start_date, end_date)).values_list('timestamp', 'score')
+
+        for timestamp, score in challenge_scores:
+            all_scores_data.append({'timestamp': timestamp, 'score': float(score)}) # score của UserExerciseAttempt là FloatField
+        for timestamp, score in general_scores:
+            all_scores_data.append({'timestamp': timestamp, 'score': float(score)}) # score của SpeakingResult là DecimalField
+
+        # Nhóm theo period_unit và tính trung bình
+        grouped_scores = defaultdict(lambda: {'total_score': 0.0, 'count': 0})
+        for record in all_scores_data:
+            period_key = trunc_func(record['timestamp']).strftime(date_format_str)
+            grouped_scores[period_key]['total_score'] += record['score']
+            grouped_scores[period_key]['count'] += 1
+        
+        results = []
+        sorted_grouped_scores = sorted(grouped_scores.items(), key=lambda x: x[0]) # Sắp xếp theo chuỗi thời gian
+        for period_str_key, data in sorted_grouped_scores:
+            avg_score = round(data['total_score'] / data['count'], 1) if data['count'] > 0 else 0
+            results.append({
+                "name": period_str_key,
+                "score": avg_score
+            })
+        return results
+
+    def get_system_usage_preview_data(self, start_date, end_date):
+        return {
+            "message": "Dữ liệu sử dụng hệ thống chi tiết (tải server, thời gian phản hồi API, tỷ lệ lỗi) hiện không được theo dõi trong phạm vi các model ứng dụng. Để có báo cáo này, cần các công cụ giám sát và logging chuyên dụng."
+        }
+
+    def get(self, request, *args, **kwargs):
+        report_type_param = request.query_params.get('reportType', 'userActivity')
+        time_range_param = request.query_params.get('timeRange', 'week') # Giá trị từ Select của FE
+        # 'Data Grouping' từ FE sẽ quyết định granularity
+        granularity_param = request.query_params.get('granularity', 'day') 
+
+        start_date, end_date, actual_time_range_param = self._get_date_range(time_range_param)
+        trunc_func, date_format_str = self._get_time_unit_accessor(granularity_param)
+        
+        preview_data = {}
+        if report_type_param == 'userActivity':
+            preview_data = self.get_user_activity_preview_data(start_date, end_date, trunc_func, date_format_str)
+        elif report_type_param == 'contentEngagement':
+            preview_data = self.get_content_engagement_preview_data(start_date, end_date)
+        elif report_type_param == 'userGrowth':
+            preview_data = self.get_user_growth_preview_data(start_date, end_date, trunc_func, date_format_str)
+        elif report_type_param == 'performance':
+            preview_data = self.get_learning_performance_preview_data(start_date, end_date, trunc_func, date_format_str)
+        elif report_type_param == 'systemUsage':
+            preview_data = self.get_system_usage_preview_data(start_date, end_date)
+        else:
+            return Response({"error": f"Loại báo cáo '{report_type_param}' không được hỗ trợ."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        return Response({
+            "report_type": report_type_param,
+            "time_range_requested": time_range_param, # Giá trị FE gửi lên
+            "granularity_requested": granularity_param,
+            "data_period_applied": { # Khoảng thời gian thực tế được áp dụng
+                "start": start_date.strftime('%Y-%m-%d'),
+                "end": end_date.strftime('%Y-%m-%d'),
+                "type": actual_time_range_param # Loại khoảng thời gian thực tế sau khi xử lý
+            },
+            "preview_data": preview_data
+        }, status=status.HTTP_200_OK)
+#     
 # ==========================================================================================================================================
 # API để lấy danh sách tất cả thể loại
 class GenreListView(APIView):

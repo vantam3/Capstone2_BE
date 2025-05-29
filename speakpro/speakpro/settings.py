@@ -103,11 +103,11 @@ WSGI_APPLICATION = 'speakpro.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'speaking_db',  # Tên cơ sở dữ liệu 
-        'USER': 'root',    # Tên người dùng MySQL
-        'PASSWORD': '123456',  # Mật khẩu MySQL
-        'HOST': 'localhost',      # Hoặc IP của máy chủ MySQL nếu không cài đặt trên máy cục bộ
-        'PORT': '3306',           # Cổng MySQL mặc định
+        'NAME': 'speaking_db',  
+        'USER': 'root',   
+        'PASSWORD': '123456',  
+        'HOST': 'localhost',      
+        'PORT': '3306',           
     }
 }
 
@@ -168,8 +168,9 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'  
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = '....'  
-EMAIL_HOST_PASSWORD = '...'
+EMAIL_HOST_USER = 'bookquest.system@gmail.com'  
+EMAIL_HOST_PASSWORD = 'mcit hiaa uwei pagi' 
+DEFAULT_FROM_EMAIL = 'SpeakPro Support <bookquest.system@gmail.com>'
 
 REST_FRAMEWORK = {
         'DEFAULT_AUTHENTICATION_CLASSES': (

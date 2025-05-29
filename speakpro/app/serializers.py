@@ -1,8 +1,9 @@
 from rest_framework import serializers
-from .models import Genre, SpeakingText, Audio, UserAudio, SpeakingResult, Level, Challenge, User, UserChallengeProgress, ChallengeExercise
+from .models import Genre, SpeakingText, Audio, UserAudio, SpeakingResult, Level, Challenge, User, UserChallengeProgress, ChallengeExercise, UserExerciseAttempt
 from django.contrib.auth.models import User
 from rest_framework.serializers import Serializer, CharField
 import base64
+
 # Serializer cho Genre
 class GenreSerializer(serializers.ModelSerializer):
     class Meta:
@@ -34,8 +35,6 @@ class SpeakingTextSerializer(serializers.ModelSerializer):
             except (UnicodeDecodeError, ValueError):
                 return "Không thể giải mã nội dung, dữ liệu không phải văn bản hợp lệ."
         return "Không có nội dung."
-
-
 
 
 class AudioSerializer(serializers.ModelSerializer):
@@ -135,3 +134,15 @@ class UserChallengeProgressSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserChallengeProgress
         fields = ['id', 'challenge', 'score', 'completion_percentage', 'status', 'last_attempted_date', 'completed_date']
+
+class ExerciseHistorySerializer(serializers.ModelSerializer):
+    title = serializers.CharField(source='challenge_exercise.title')
+    challenge_title = serializers.CharField(source='challenge_exercise.challenge.title')
+    attempted_time = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserExerciseAttempt
+        fields = ['id', 'title', 'challenge_title', 'score', 'attempted_time']
+
+    def get_attempted_time(self, obj):
+        return obj.attempted_at.strftime("%Y-%m-%d %H:%M:%S")
