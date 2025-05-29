@@ -153,15 +153,14 @@ class ForgotPasswordView(APIView):
 
         try:
             send_mail(
-                subject="Password Reset Confirmation Code - Speakpro", # Updated subject
+                subject="Password Reset Confirmation Code - Speakpro", 
                 message=f"Hello {user.username or user.first_name or 'User'},\n\nYour confirmation code is: {confirmation_code}\nUse this code to reset your password. It will expire in 10 minutes.",
-                from_email=settings.EMAIL_HOST_USER,
+                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[email],
                 fail_silently=False,
             )
             return Response({'message': 'Confirmation code sent to your email!'}, status=status.HTTP_200_OK)
         except Exception as e:
-            # Log the error e for debugging
             print(f"Error sending password reset email to {email}: {e}")
             return Response({'error': 'Failed to send email. Please try again later.'}, # Removed details from response 'details': str(e)
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -175,8 +174,6 @@ class ResetPasswordView(APIView):
         email = serializer.validated_data['email']
         confirmation_code = serializer.validated_data['confirmation_code']
         new_password = serializer.validated_data['new_password']
-
-        # Retrieve the confirmation code from cache
         cached_code = cache.get(f"password_reset_code_{email}")
 
         if not cached_code:
