@@ -15,7 +15,7 @@ This is the backend of **SpeakPro – Intelligent English Speaking Assistant**, 
 ### 1️⃣ Step 1: Clone the repository
 ```bash
 git clone https://github.com/vantam3/Capstone2_BE.git
-cd speakpro-backend
+cd speakpro
 ```
 
 ### 2️⃣ Step 2: Create a virtual environment
@@ -27,7 +27,6 @@ venv\Scripts\activate          # On Windows
 
 ### 3️⃣ Step 3: Install dependencies
 ```bash
-cd speapro
 pip install -r requirements.txt
 ```
 
