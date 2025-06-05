@@ -17,7 +17,7 @@ This is the backend of **SpeakPro – Intelligent English Speaking Assistant**, 
 ### 1️⃣ Step 1: Clone the repository
 ```bash
 git clone https://github.com/vantam3/Capstone2_BE.git
-cd Capstone2_BE
+cd speakpro-backend
 ```
 
 ### 2️⃣ Step 2: Create and activate a virtual environment
