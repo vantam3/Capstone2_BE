@@ -1171,7 +1171,7 @@ class DialogueAPIView(APIView):
             return Response({"error": f"Speech recognition failed: {str(e)}"}, status=500)
 
         # Chọn giọng đọc random
-        tlds = ['come','com.au','co.uk','ca','in','som.sg','co.uk']
+        tlds = ['com','com.au','co.uk','ca','com.sg']
         chosen_tld = random.choice(tlds)
 
         # Tạo prompt với style ngẫu nhiên
@@ -1194,7 +1194,7 @@ class DialogueAPIView(APIView):
         The dialogue should:
         - Start with a natural greeting or question from AI.
         - Include a mix of statements and questions from both speakers.
-        - Be around 6 to 8 turns total (3 to 4 turns per speaker).
+        - Be around 6 to 8 turns total.
         - End with a natural conclusion or final comment from AI.
 
         {variation}
